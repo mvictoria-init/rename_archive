@@ -1,46 +1,102 @@
 import os
 import re
 import shutil
-import zipfile
 import threading
 import hashlib
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
-def sanitize(s: str) -> str:
-    if not s:
-        return ""
-    # Normalize whitespace and remove illegal Windows filename chars
-    s = re.sub(r'\s+', ' ', s)
-    import tkinter as tk
-    from renamer.gui import RenamerApp
+from .utils import sanitize, normalize_authors, format_authors_for_filename, human_readable_size
+from .metadata import extract_metadata
 
 
-    def main():
-        root = tk.Tk()
-        app = RenamerApp(root)
-        root.mainloop()
+class RenamerApp:
+    def __init__(self, root):
+        self.root = root
+        root.title('Renombrador por Autor y Título')
+        self.folder = tk.StringVar()
 
+        frm = ttk.Frame(root, padding=10)
+        frm.pack(fill='both', expand=True)
 
-    if __name__ == '__main__':
-        main()
+        top = ttk.Frame(frm)
+        top.pack(fill='x')
+        ttk.Button(top, text='Seleccionar carpeta', command=self.select_folder).pack(side='left')
+        ttk.Label(top, textvariable=self.folder).pack(side='left', padx=8)
+
+        self.status = tk.StringVar(value='')
+        ttk.Label(frm, textvariable=self.status).pack(fill='x')
+
+        content = ttk.Frame(frm)
+        content.pack(fill='both', expand=True)
+
+        self.tree = ttk.Treeview(content, columns=('orig','new','size'), show='headings')
+        self.tree.heading('orig', text='Original')
+        self.tree.heading('new', text='Propuesto')
+        self.tree.heading('size', text='Tamaño')
+        self.tree.pack(side='left', fill='both', expand=True, pady=8)
+
+        # (no preview panel)
+
+        # mapping from tree item id to entries index
+        self.item_map = {}
+        # UI bindings
+        self.tree.bind('<<TreeviewSelect>>', lambda e: self.on_select())
+        self._editing_entry = None
+        self.tree.bind('<Double-1>', self.on_double_click)
+
+        bottom = ttk.Frame(frm)
+        bottom.pack(fill='x')
+        self.scan_btn = ttk.Button(bottom, text='Escanear', command=self.scan)
+        self.scan_btn.pack(side='left')
+        self.rename_btn = ttk.Button(bottom, text='Renombrar', command=self.rename_files)
+        self.rename_btn.pack(side='left', padx=6)
+        self.rename_selected_btn = ttk.Button(bottom, text='Renombrar seleccionado', command=self.rename_selected)
+        self.rename_selected_btn.pack(side='left', padx=6)
+        self.delete_dup_btn = ttk.Button(bottom, text='Eliminar duplicados', command=self.delete_duplicates)
+        self.delete_dup_btn.pack(side='left', padx=6)
+
+        self._scan_thread = None
+        self.entries = []
+
+    def select_folder(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.folder.set(d)
+
+    def scan(self):
+        folder = self.folder.get()
+        if not folder:
+            messagebox.showwarning('Carpeta', 'Seleccione una carpeta primero')
+            return
+        if self._scan_thread and self._scan_thread.is_alive():
+            return
+        self.scan_btn.state(['disabled'])
+        self.rename_btn.state(['disabled'])
+        self.tree.delete(*self.tree.get_children())
+        self.entries = []
+        self.status.set('Escaneando...')
+
+        def file_hash(path, block_size=65536):
+            h = hashlib.sha256()
+            try:
+                with open(path, 'rb') as fh:
+                    for chunk in iter(lambda: fh.read(block_size), b''):
+                        h.update(chunk)
+                return h.hexdigest()
+            except Exception:
                 return None
-
-        # use global human_readable_size
 
         def worker(folder_path):
             p = Path(folder_path)
-            hash_map = {}  # hash -> first tree item id
+            hash_map = {}
             for f in p.iterdir():
                 if f.is_file():
                     title, author = extract_metadata(f)
                     ext = f.suffix
                     t = sanitize(title) if title else ''
-                    # normalize and sanitize multiple authors
-                    a = ''
-                    auth_norm = normalize_authors(author)
-                    a = format_authors_for_filename(auth_norm, max_authors=3)
+                    a = format_authors_for_filename(normalize_authors(author), max_authors=3)
                     if a and t:
                         new = f"{a} - {t}{ext}"
                     elif t:
@@ -56,14 +112,11 @@ def sanitize(s: str) -> str:
                         size_val = f.stat().st_size
                     except Exception:
                         size_val = None
-                    # store title and author as well for manual editing
                     self.entries.append((str(f), new, file_h, size_val, title, author))
-                    # schedule UI update with duplicate tagging
+
                     def insert_item(fname=f.name, nname=new, fh=file_h, sz=size_val):
-                        # if hash already seen, mark both as duplicates
                         tags = ()
                         if fh and fh in hash_map:
-                            # mark existing item as duplicate
                             first_id = hash_map[fh]
                             prev_tags = set(self.tree.item(first_id, 'tags') or ())
                             prev_tags.add('dup')
@@ -71,27 +124,27 @@ def sanitize(s: str) -> str:
                             tags = ('dup',)
                         else:
                             if fh:
-                                hash_map[fh] = None  # placeholder; will update after insert
-                        # index of the entry is len(self.entries)-1
+                                hash_map[fh] = None
                         idx = len(self.entries) - 1
                         iid = f'i{idx}'
                         self.tree.insert('', 'end', iid=iid, values=(fname, nname, human_readable_size(sz)), tags=tags)
-                        # map item id to index and record first seen id for hash
                         self.item_map[iid] = idx
                         if fh and hash_map.get(fh) is None:
                             hash_map[fh] = iid
+
                     self.root.after(0, insert_item)
-            # finished
+
             def on_done():
                 self.status.set('Escaneo completado')
                 self.scan_btn.state(['!disabled'])
                 self.rename_btn.state(['!disabled'])
-                # configure duplicate tag style
                 try:
                     self.tree.tag_configure('dup', background='#ffdce0')
                 except Exception:
                     pass
+
             self.root.after(0, on_done)
+
         t = threading.Thread(target=worker, args=(folder,), daemon=True)
         self._scan_thread = t
         t.start()
@@ -130,13 +183,9 @@ def sanitize(s: str) -> str:
         self.scan()
 
     def on_select(self):
-        # selection handler left intentionally minimal (no preview panel)
         return
 
-    
-
     def on_double_click(self, event):
-        # identify cell
         region = self.tree.identify('region', event.x, event.y)
         if region != 'cell':
             return
@@ -144,18 +193,14 @@ def sanitize(s: str) -> str:
         row = self.tree.identify_row(event.y)
         if not row or not col:
             return
-        # we only allow editing the 'new' column (#2)
         if col != '#2':
             return
-        # get bbox of cell
         bbox = self.tree.bbox(row, column=col)
         if not bbox:
             return
         x, y, width, height = bbox
-        # get current value
         vals = list(self.tree.item(row, 'values'))
         cur = vals[1]
-        # create entry
         if self._editing_entry:
             self._editing_entry.destroy()
         edit = ttk.Entry(self.tree, width=40)
@@ -168,14 +213,11 @@ def sanitize(s: str) -> str:
             newval = edit.get().strip()
             edit.destroy()
             self._editing_entry = None
-            # update tree
             vals[1] = newval
             self.tree.item(row, values=vals)
-            # update entries data
             idx = self.item_map.get(row)
             if idx is not None and idx < len(self.entries):
                 orig, old_new, fh, sz, title, author = self.entries[idx]
-                # store updated new filename
                 self.entries[idx] = (orig, newval, fh, sz, title, author)
 
         edit.bind('<Return>', finish)
@@ -215,13 +257,11 @@ def sanitize(s: str) -> str:
             messagebox.showerror('Errores', f'Ocurrieron errores con {len(conflicts)} archivos')
         else:
             messagebox.showinfo('Listo', 'Renombrado completado')
-        # refresh view
         self.scan()
 
     def delete_duplicates(self):
-        # build groups: hash -> list of (path, size)
         groups = {}
-        for orig, new, fh, sz in self.entries:
+        for orig, new, fh, sz, title, author in self.entries:
             if not fh:
                 continue
             groups.setdefault(fh, []).append((orig, sz))
@@ -230,7 +270,6 @@ def sanitize(s: str) -> str:
             messagebox.showinfo('Duplicados', 'No se encontraron archivos duplicados')
             return
 
-        # Create selection dialog
         dlg = tk.Toplevel(self.root)
         dlg.title('Seleccionar copias a conservar')
         dlg.geometry('800x500')
@@ -247,7 +286,7 @@ def sanitize(s: str) -> str:
         scrollbar.pack(side='right', fill='y')
 
         group_vars = {}
-        group_info = []  # list of (hash, list of (path,size))
+        group_info = []
         for h, items in dup_groups.items():
             group_info.append((h, items))
 
@@ -255,7 +294,6 @@ def sanitize(s: str) -> str:
             lf = ttk.LabelFrame(scroll_frame, text=f'Grupo {gi+1} — {len(items)} archivos')
             lf.pack(fill='x', padx=6, pady=6, anchor='n')
             var = tk.IntVar(value=0)
-            # default: keep largest file
             max_idx = 0
             max_size = -1
             for idx, (p, sz) in enumerate(items):
@@ -295,8 +333,3 @@ def sanitize(s: str) -> str:
 
         ttk.Button(btns, text='Cancelar', command=on_cancel).pack(side='right', padx=6)
         ttk.Button(btns, text='Eliminar seleccionados', command=on_apply).pack(side='right')
-
-if __name__ == '__main__':
-    root = tk.Tk()
-    app = RenamerApp(root)
-    root.mainloop()
