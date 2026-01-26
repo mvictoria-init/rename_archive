@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .utils import sanitize, normalize_authors, format_authors_for_filename, human_readable_size
 from .metadata import extract_metadata
+from .convert import pdf_to_epub, convert_to_epub
 
 
 class RenamerApp:
@@ -31,16 +32,52 @@ class RenamerApp:
         content = ttk.Frame(frm)
         content.pack(fill='both', expand=True)
 
-        self.tree = ttk.Treeview(content, columns=('orig','new','size'), show='headings')
+        # Treeview with scrollbars
+        tree_frame = ttk.Frame(content)
+        tree_frame.pack(fill='both', expand=True, pady=8)
+
+        self.tree = ttk.Treeview(tree_frame, columns=('orig', 'new', 'size'), show='headings')
         self.tree.heading('orig', text='Original')
         self.tree.heading('new', text='Propuesto')
         self.tree.heading('size', text='Tamaño')
-        self.tree.pack(side='left', fill='both', expand=True, pady=8)
+
+        vs = ttk.Scrollbar(tree_frame, orient='vertical', command=self.tree.yview)
+        hs = ttk.Scrollbar(tree_frame, orient='horizontal', command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
+
+        # layout with grid so scrollbars align
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vs.grid(row=0, column=1, sticky='ns')
+        hs.grid(row=1, column=0, sticky='ew')
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+
+        # mouse wheel scrolling (Windows/Mac/Linux adjustments)
+        def _on_mousewheel(event):
+            # Windows: event.delta is multiple of 120
+            delta = 0
+            try:
+                delta = int(-1 * (event.delta / 120))
+            except Exception:
+                # Linux: event.num 4/5
+                if hasattr(event, 'num'):
+                    if event.num == 4:
+                        delta = -1
+                    elif event.num == 5:
+                        delta = 1
+            if delta:
+                self.tree.yview_scroll(delta, 'units')
+
+        # bind wheel to tree
+        self.tree.bind('<MouseWheel>', _on_mousewheel)
+        self.tree.bind('<Button-4>', _on_mousewheel)
+        self.tree.bind('<Button-5>', _on_mousewheel)
 
         # (no preview panel)
 
         # mapping from tree item id to entries index
         self.item_map = {}
+        self._next_iid = 0
         # UI bindings
         self.tree.bind('<<TreeviewSelect>>', lambda e: self.on_select())
         self._editing_entry = None
@@ -56,6 +93,12 @@ class RenamerApp:
         self.rename_selected_btn.pack(side='left', padx=6)
         self.delete_dup_btn = ttk.Button(bottom, text='Eliminar duplicados', command=self.delete_duplicates)
         self.delete_dup_btn.pack(side='left', padx=6)
+        self.convert_btn = ttk.Button(bottom, text='Convertir a EPUB', command=self.convert_selected_to_epub)
+        self.convert_btn.pack(side='left', padx=6)
+        self.delete_file_btn = ttk.Button(bottom, text='Eliminar archivo', command=self.delete_selected_file)
+        self.delete_file_btn.pack(side='left', padx=6)
+        self.refine_btn = ttk.Button(bottom, text='Refinar propuesta', command=self.refine_selected_proposals)
+        self.refine_btn.pack(side='left', padx=6)
 
         self._scan_thread = None
         self.entries = []
@@ -76,6 +119,8 @@ class RenamerApp:
         self.rename_btn.state(['disabled'])
         self.tree.delete(*self.tree.get_children())
         self.entries = []
+        self.item_map = {}
+        self._next_iid = 0
         self.status.set('Escaneando...')
 
         def file_hash(path, block_size=65536):
@@ -95,7 +140,7 @@ class RenamerApp:
                 if f.is_file():
                     title, author = extract_metadata(f)
                     ext = f.suffix
-                    t = sanitize(title) if title else ''
+                    t = sanitize(str(title)) if title else ''
                     a = format_authors_for_filename(normalize_authors(author), max_authors=3)
                     if a and t:
                         new = f"{a} - {t}{ext}"
@@ -112,7 +157,8 @@ class RenamerApp:
                         size_val = f.stat().st_size
                     except Exception:
                         size_val = None
-                    self.entries.append((str(f), new, file_h, size_val, title, author))
+                    # store: full path, display name, proposed new name, hash, size, title, author
+                    self.entries.append((str(f), f.name, new, file_h, size_val, title, author))
 
                     def insert_item(fname=f.name, nname=new, fh=file_h, sz=size_val):
                         tags = ()
@@ -126,7 +172,8 @@ class RenamerApp:
                             if fh:
                                 hash_map[fh] = None
                         idx = len(self.entries) - 1
-                        iid = f'i{idx}'
+                        iid = f'i{self._next_iid}'
+                        self._next_iid += 1
                         self.tree.insert('', 'end', iid=iid, values=(fname, nname, human_readable_size(sz)), tags=tags)
                         self.item_map[iid] = idx
                         if fh and hash_map.get(fh) is None:
@@ -159,7 +206,7 @@ class RenamerApp:
             return
         self.rename_btn.state(['disabled'])
         conflicts = []
-        for orig, new, fh, sz, title, author in list(self.entries):
+        for orig, disp, new, fh, sz, title, author in list(self.entries):
             src = Path(orig)
             dst = Path(folder) / new
             if dst.exists():
@@ -182,6 +229,153 @@ class RenamerApp:
         self.rename_btn.state(['!disabled'])
         self.scan()
 
+    def convert_selected_to_epub(self):
+        sels = self.tree.selection()
+        if not sels:
+            messagebox.showinfo('Convertir', 'Seleccione uno o más archivos para convertir')
+            return
+
+        # run conversion in background to avoid blocking UI
+        self.convert_btn.state(['disabled'])
+        self.status.set('Convirtiendo...')
+
+        def worker(selected_iids):
+            errors = []
+            converted = 0
+            for iid in selected_iids:
+                idx = self.item_map.get(iid)
+                if idx is None or idx >= len(self.entries):
+                    continue
+                orig, disp, proposed, fh, sz, title, author = self.entries[idx]
+                p = Path(orig)
+                dst = p.with_suffix('.epub')
+                if dst.exists():
+                    base = dst.stem
+                    i = 1
+                    while True:
+                        candidate = dst.with_name(f"{base} ({i}){dst.suffix}")
+                        if not candidate.exists():
+                            dst = candidate
+                            break
+                        i += 1
+
+                try:
+                    success, err = convert_to_epub(p, str(dst), title=title, authors=normalize_authors(author))
+                except Exception as e:
+                    success, err = False, str(e)
+
+                if success:
+                    converted += 1
+                else:
+                    errors.append((p, err))
+
+            def on_done():
+                self.convert_btn.state(['!disabled'])
+                if errors:
+                    messagebox.showerror('Errores', f'Ocurrieron errores al convertir {len(errors)} archivos:\n{errors[0][1]}')
+                else:
+                    messagebox.showinfo('Listo', f'Convertidos {converted} archivos a EPUB')
+                self.status.set('')
+
+            self.root.after(0, on_done)
+
+        t = threading.Thread(target=worker, args=(sels,), daemon=True)
+        t.start()
+
+    def delete_selected_file(self):
+        sels = self.tree.selection()
+        if not sels:
+            messagebox.showinfo('Eliminar', 'Seleccione uno o más archivos para eliminar')
+            return
+        if not messagebox.askyesno('Confirmar eliminación', f'¿Eliminar {len(sels)} archivo(s)? Esta acción no se puede deshacer.'):
+            return
+        removed_paths = []
+        errors = []
+        for iid in list(sels):
+            idx = self.item_map.get(iid)
+            if idx is None or idx >= len(self.entries):
+                continue
+            orig, disp, proposed, fh, sz, title, author = self.entries[idx]
+            try:
+                if os.path.exists(orig):
+                    os.remove(orig)
+                removed_paths.append(orig)
+            except Exception as e:
+                errors.append((orig, str(e)))
+
+        # remove deleted entries from internal list and rebuild tree
+        if removed_paths:
+            self.entries = [e for e in self.entries if e[0] not in removed_paths]
+            self.tree.delete(*self.tree.get_children())
+            self.item_map = {}
+            # simple rebuild, without preserving duplicate tags
+            # rebuild using the global iid counter to avoid collisions
+            for idx, entry in enumerate(self.entries):
+                orig, disp, proposed, fh, sz, title, author = entry
+                iid = f'i{self._next_iid}'
+                self._next_iid += 1
+                self.tree.insert('', 'end', iid=iid, values=(disp, proposed, human_readable_size(sz)))
+                self.item_map[iid] = idx
+
+        if errors:
+            messagebox.showerror('Errores', f'Ocurrieron errores al eliminar {len(errors)} archivos')
+        else:
+            messagebox.showinfo('Listo', f'Eliminados {len(removed_paths)} archivos')
+
+    def refine_selected_proposals(self):
+        from .utils import guess_title_author_from_filename
+        sels = self.tree.selection()
+        target_idxs = []
+        if sels:
+            for iid in sels:
+                idx = self.item_map.get(iid)
+                if idx is not None and idx < len(self.entries):
+                    target_idxs.append(idx)
+        else:
+            target_idxs = list(range(len(self.entries)))
+
+        changed = 0
+        for idx in target_idxs:
+            orig, disp, proposed, fh, sz, title, author = self.entries[idx]
+            # try metadata first
+            tmeta, ameta = title, author
+            # if no useful metadata, try to guess from filename or display name
+            if not tmeta and not ameta:
+                g_title, g_author = guess_title_author_from_filename(disp or orig)
+            else:
+                g_title, g_author = None, None
+
+            final_title = tmeta or g_title
+            final_author = ameta or g_author
+
+            # format proposal
+            a = format_authors_for_filename(normalize_authors(final_author), max_authors=3) if final_author else ''
+            t = sanitize(final_title) if final_title else ''
+            ext = Path(orig).suffix
+            if a and t:
+                newname = f"{a} - {t}{ext}"
+            elif t:
+                newname = f"{t}{ext}"
+            elif a:
+                newname = f"{a}{ext}"
+            else:
+                newname = disp or os.path.basename(orig)
+
+            if newname != proposed:
+                self.entries[idx] = (orig, disp, newname, fh, sz, final_title, final_author)
+                changed += 1
+
+        if changed:
+            # refresh tree values for visible items
+            for iid, idx in list(self.item_map.items()):
+                if idx < len(self.entries):
+                    orig, disp, proposed, fh, sz, title, author = self.entries[idx]
+                    try:
+                        self.tree.item(iid, values=(disp, proposed, human_readable_size(sz)))
+                    except Exception:
+                        pass
+        messagebox.showinfo('Refinar', f'Actualizadas {changed} propuestas')
+
     def on_select(self):
         return
 
@@ -193,14 +387,17 @@ class RenamerApp:
         row = self.tree.identify_row(event.y)
         if not row or not col:
             return
-        if col != '#2':
+        # allow editing column 1 (Original) and column 2 (Propuesto)
+        if col not in ('#1', '#2'):
             return
         bbox = self.tree.bbox(row, column=col)
         if not bbox:
             return
         x, y, width, height = bbox
         vals = list(self.tree.item(row, 'values'))
-        cur = vals[1]
+        # column mapping: #1 -> vals[0] (original display), #2 -> vals[1] (proposed)
+        col_index = 0 if col == '#1' else 1
+        cur = vals[col_index]
         if self._editing_entry:
             self._editing_entry.destroy()
         edit = ttk.Entry(self.tree, width=40)
@@ -213,12 +410,17 @@ class RenamerApp:
             newval = edit.get().strip()
             edit.destroy()
             self._editing_entry = None
-            vals[1] = newval
+            vals[col_index] = newval
             self.tree.item(row, values=vals)
             idx = self.item_map.get(row)
             if idx is not None and idx < len(self.entries):
-                orig, old_new, fh, sz, title, author = self.entries[idx]
-                self.entries[idx] = (orig, newval, fh, sz, title, author)
+                # entries structure: (full_path, display_name, proposed_new, hash, size, title, author)
+                orig, disp, proposed, fh, sz, title, author = self.entries[idx]
+                if col_index == 0:
+                    disp = newval
+                else:
+                    proposed = newval
+                self.entries[idx] = (orig, disp, proposed, fh, sz, title, author)
 
         edit.bind('<Return>', finish)
         edit.bind('<FocusOut>', finish)
@@ -237,7 +439,7 @@ class RenamerApp:
             idx = self.item_map.get(iid)
             if idx is None or idx >= len(self.entries):
                 continue
-            orig, new, fh, sz, title, author = self.entries[idx]
+            orig, disp, new, fh, sz, title, author = self.entries[idx]
             src = Path(orig)
             dst = Path(folder) / new
             if dst.exists():
@@ -261,7 +463,7 @@ class RenamerApp:
 
     def delete_duplicates(self):
         groups = {}
-        for orig, new, fh, sz, title, author in self.entries:
+        for orig, disp, new, fh, sz, title, author in self.entries:
             if not fh:
                 continue
             groups.setdefault(fh, []).append((orig, sz))
