@@ -161,23 +161,29 @@ class RenamerApp:
                     self.entries.append((str(f), f.name, new, file_h, size_val, title, author))
 
                     def insert_item(fname=f.name, nname=new, fh=file_h, sz=size_val):
-                        tags = ()
-                        if fh and fh in hash_map:
-                            first_id = hash_map[fh]
-                            prev_tags = set(self.tree.item(first_id, 'tags') or ())
-                            prev_tags.add('dup')
-                            self.tree.item(first_id, tags=tuple(prev_tags))
-                            tags = ('dup',)
-                        else:
-                            if fh:
-                                hash_map[fh] = None
+                        # create IID first
                         idx = len(self.entries) - 1
                         iid = f'i{self._next_iid}'
                         self._next_iid += 1
+                        tags = ()
+                        # If we have a file hash, check if we've seen it before
+                        if fh:
+                            prev_iid = hash_map.get(fh)
+                            if prev_iid:
+                                # mark previous item as duplicate
+                                try:
+                                    prev_tags = set(self.tree.item(prev_iid, 'tags') or ())
+                                    prev_tags.add('dup')
+                                    self.tree.item(prev_iid, tags=tuple(prev_tags))
+                                except Exception:
+                                    pass
+                                tags = ('dup',)
+                            else:
+                                # first time we see this hash: record this iid
+                                hash_map[fh] = iid
+
                         self.tree.insert('', 'end', iid=iid, values=(fname, nname, human_readable_size(sz)), tags=tags)
                         self.item_map[iid] = idx
-                        if fh and hash_map.get(fh) is None:
-                            hash_map[fh] = iid
 
                     self.root.after(0, insert_item)
 
