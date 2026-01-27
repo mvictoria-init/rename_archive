@@ -188,7 +188,10 @@ def pdf_to_epub(pdf_path, epub_path, title=None, authors=None):
                 pages.append(txt)
             full = '\n\n'.join([p for p in pages if p])
             paragraphs = ''.join(f"<p>{html.escape(p).replace('\\n', '<br/>')}</p>" for p in full.split('\n\n') if p.strip())
-            chapters = [(0, f"<h1>{html.escape(title) if title else ''}</h1>" + paragraphs)]
+            if title:
+                chapters = [(0, f"<h1>{html.escape(title)}</h1>" + paragraphs)]
+            else:
+                chapters = [(0, paragraphs)]
 
         # build EPUB chapters/items
         spine = ['nav']
@@ -247,7 +250,8 @@ def pdf_to_epub(pdf_path, epub_path, title=None, authors=None):
             book.toc = toc_entries
         else:
             book.toc = tuple((epub.Link(ch.file_name, ch.title, ch.file_name) for ch in chap_items))
-        book.spine = spine
+            # Do not include 'nav' as the first spine item to avoid generating an extra TOC/title page
+            book.spine = [s for s in spine if s != 'nav']
         book.add_item(epub.EpubNcx())
         book.add_item(epub.EpubNav())
         # write output
@@ -393,24 +397,59 @@ def convert_to_epub(input_path, epub_path, title=None, authors=None):
     if not parts:
         return False, 'No text extracted from input or unsupported format.'
 
-    # build minimal chapters: split parts into chapters by detecting headings (short lines, titlecase or all caps)
+    # build minimal chapters: split parts into chapters by detecting headings
+    # Pre-filter parts: remove empty, duplicates, and parts equal to title/author
+    clean_parts = []
+    seen = None
+    title_norm = (title or '').strip().lower()
+    authors_text = ''
+    if authors:
+        try:
+            authors_text = ' '.join(authors).strip().lower() if isinstance(authors, (list, tuple)) else str(authors).strip().lower()
+        except Exception:
+            authors_text = str(authors).strip().lower()
+    for ptext in parts:
+        if not ptext or not ptext.strip():
+            continue
+        s = ptext.strip()
+        s_low = s.lower()
+        if title_norm and s_low == title_norm:
+            continue
+        if authors_text and s_low == authors_text:
+            continue
+        if s == seen:
+            continue
+        clean_parts.append(s)
+        seen = s
+
     chapters = []
     cur = []
     chap_idx = 0
-    for block in parts:
-        # heuristic: treat short lines in title form as headings
+    n = len(clean_parts)
+    for i, block in enumerate(clean_parts):
+        is_heading = False
         if len(block) < 120 and (block.isupper() or block.istitle() or block.endswith(':')):
-            # flush current
+            # check next block to ensure heading has content following
+            next_block = clean_parts[i+1] if i+1 < n else ''
+            if next_block and len(next_block) > 40:
+                is_heading = True
+        if is_heading:
+            # flush current paragraph group
             if cur:
-                chapters.append((chap_idx, '<p>' + '</p><p>'.join(html.escape(x).replace('\n', '<br/>') for x in cur) + '</p>'))
+                ch_html = '<p>' + '</p><p>'.join(html.escape(x).replace('\n', '<br/>') for x in cur) + '</p>'
+                chapters.append((chap_idx, ch_html))
                 chap_idx += 1
                 cur = []
-            chapters.append((chap_idx, f"<h2>{html.escape(block)}</h2>"))
-            chap_idx += 1
+            # add heading as its own chapter header (but only if not too repetitive)
+            h = html.escape(block)
+            if not chapters or (chapters and chapters[-1][1].find(h) == -1):
+                chapters.append((chap_idx, f"<h2>{h}</h2>"))
+                chap_idx += 1
         else:
             cur.append(block)
     if cur:
-        chapters.append((chap_idx, '<p>' + '</p><p>'.join(html.escape(x).replace('\n', '<br/>') for x in cur) + '</p>'))
+        ch_html = '<p>' + '</p><p>'.join(html.escape(x).replace('\n', '<br/>') for x in cur) + '</p>'
+        chapters.append((chap_idx, ch_html))
 
     # build EPUB
     book = epub.EpubBook()
@@ -445,7 +484,8 @@ def convert_to_epub(input_path, epub_path, title=None, authors=None):
         spine.append(ch)
 
     book.toc = tuple((epub.Link(ch.file_name, ch.title, ch.file_name) for ch in chap_items))
-    book.spine = spine
+    # Avoid placing the navigation page as the first spine entry (prevents an extra title/TOC page)
+    book.spine = [s for s in spine if s != 'nav']
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
