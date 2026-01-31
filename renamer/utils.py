@@ -2,11 +2,33 @@ import re
 import os
 
 def sanitize(s: str) -> str:
+    """Return a filesystem-safe, human-friendly string.
+
+    This removes control characters, reserved Windows filename characters,
+    trims trailing spaces/dots, collapses whitespace and guarantees a
+    non-empty return (uses 'Unknown' as fallback).
+    """
     if not s:
-        return ""
+        return "Unknown"
+    # normalize whitespace
     s = re.sub(r'\s+', ' ', s)
-    s = re.sub(r'[<>:\"/\\|?*]', '', s)
-    return s.strip()
+    # remove C0 control chars and DEL
+    s = re.sub(r'[\x00-\x1f\x7f]', '', s)
+    # remove characters invalid on Windows filenames
+    s = re.sub(r'[<>:\\"/\\|?*]', '', s)
+    # remove other problematic characters (unprintable, unusual separators)
+    s = s.strip()
+    # Windows forbids names that end with space or dot
+    s = s.rstrip(' .')
+    # reserved device names on Windows (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9)
+    if re.match(r'^(con|prn|aux|nul|com\d|lpt\d)$', s.strip(), flags=re.IGNORECASE):
+        s = '_' + s
+    # limit length to reasonable filename size
+    if len(s) > 200:
+        s = s[:200].rstrip()
+    if not s:
+        return 'Unknown'
+    return s
 
 
 def normalize_authors(author_field):

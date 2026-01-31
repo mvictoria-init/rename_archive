@@ -42,7 +42,12 @@ def pdf_to_epub(pdf_path, epub_path, title=None, authors=None):
         pdf_path = Path(pdf_path)
         epub_path = Path(epub_path)
 
-        reader = PdfReader(str(pdf_path))
+        # suppress PyPDF2 stderr messages (xref warnings) while reading
+        import os
+        import contextlib
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stderr(devnull):
+                reader = PdfReader(str(pdf_path))
         pages = []
         for page in reader.pages:
             try:

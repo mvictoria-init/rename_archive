@@ -10,6 +10,8 @@ from pathlib import Path
 from .utils import sanitize, normalize_authors, format_authors_for_filename, human_readable_size
 from .metadata import extract_metadata
 from .convert import pdf_to_epub, convert_to_epub
+import sqlite3
+from .index import db_exists, files_in_folder
 
 
 class RenamerApp:
@@ -122,6 +124,160 @@ class RenamerApp:
         self.item_map = {}
         self._next_iid = 0
         self.status.set('Escaneando...')
+        # Fast path: if an index DB exists and contains entries for this folder,
+        # load from the DB instead of scanning the filesystem (much faster),
+        # then run an incremental background pass to index new/changed files.
+        try:
+            folder_path = Path(folder).resolve()
+            if db_exists():
+                sha_map = {}
+                rows = list(files_in_folder(folder_path))
+                if rows:
+                    for r in rows:
+                        p = Path(r['path'])
+                        title = r.get('title')
+                        author = r.get('authors')
+                        ext = p.suffix
+                        t = sanitize(str(title)) if title else ''
+                        a = format_authors_for_filename(normalize_authors(author), max_authors=3) if author else ''
+                        if a and t:
+                            new = f"{a} - {t}{ext}"
+                        elif t:
+                            new = f"{t}{ext}"
+                        elif a:
+                            new = f"{a}{ext}"
+                        else:
+                            new = p.name
+                        fh = r.get('sha256')
+                        sz = r.get('size')
+                        idx = len(self.entries)
+                        self.entries.append((str(p), p.name, new, fh, sz, title, author))
+                        iid = f'i{self._next_iid}'
+                        self._next_iid += 1
+                        tags = ()
+                        try:
+                            self.tree.insert('', 'end', iid=iid, values=(p.name, new, human_readable_size(sz)), tags=tags)
+                        except Exception:
+                            self.tree.insert('', 'end', values=(p.name, new, human_readable_size(sz)))
+                        self.item_map[iid] = idx
+                        if fh:
+                            sha_map.setdefault(fh, []).append(iid)
+                    # mark duplicates (same sha256) with tag 'dup'
+                    for h, iids in sha_map.items():
+                        if len(iids) > 1:
+                            for ii in iids:
+                                try:
+                                    existing = set(self.tree.item(ii, 'tags') or ())
+                                    existing.add('dup')
+                                    self.tree.item(ii, tags=tuple(existing))
+                                except Exception:
+                                    pass
+                    self.status.set('Escaneo desde índice completado')
+                    self.scan_btn.state(['!disabled'])
+                    self.rename_btn.state(['!disabled'])
+                    try:
+                        self.tree.tag_configure('dup', background='#ffdce0')
+                    except Exception:
+                        pass
+
+                    # start incremental background worker to detect new/changed files
+                    def incremental_worker(folder_path):
+                        try:
+                            conn = sqlite3.connect(str(DB_PATH))
+                            cur = conn.cursor()
+                            local_sha_map = {}
+                            seen_paths = set()
+                            # build quick map of existing DB entries for folder
+                            cur.execute('SELECT path,size,mtime,sha256,title,authors FROM files WHERE path LIKE ?', (str(folder_path) + '%',))
+                            db_map = {row[0]: {'size': row[1], 'mtime': row[2], 'sha': row[3], 'title': row[4], 'authors': row[5]} for row in cur.fetchall()}
+                            for p in folder_path.rglob('*'):
+                                if not p.is_file():
+                                    continue
+                                sp = str(p)
+                                try:
+                                    st = p.stat()
+                                except Exception:
+                                    continue
+                                size = st.st_size
+                                mtime = st.st_mtime
+                                db_row = db_map.get(sp)
+                                if db_row and db_row.get('size') == size and abs((db_row.get('mtime') or 0) - mtime) < 1.0:
+                                    # unchanged
+                                    seen_paths.add(sp)
+                                    continue
+                                # new or changed: compute sha, extract metadata and upsert
+                                fh = None
+                                try:
+                                    with open(p, 'rb') as fhf:
+                                        import hashlib as _hash
+                                        h = _hash.sha256()
+                                        for chunk in iter(lambda: fhf.read(65536), b''):
+                                            h.update(chunk)
+                                        fh = h.hexdigest()
+                                except Exception:
+                                    fh = None
+                                title = None
+                                authors = None
+                                try:
+                                    meta = extract_metadata(p)
+                                    if isinstance(meta, dict):
+                                        title = meta.get('title')
+                                        authors = meta.get('authors')
+                                except Exception:
+                                    pass
+                                # upsert into DB
+                                now = datetime.utcnow().isoformat()
+                                try:
+                                    cur.execute('INSERT OR REPLACE INTO files(path,relpath,size,mtime,sha256,title,authors,indexed_at) VALUES(?,?,?,?,?,?,?,?)',
+                                                (sp, str(p.relative_to(folder_path)), size, mtime, fh, str(authors) if authors else None, now, None))
+                                    conn.commit()
+                                except Exception:
+                                    pass
+                                # update tree: append new entry and mark duplicates later
+                                def add_row_to_tree():
+                                    idx = len(self.entries)
+                                    p_name = p.name
+                                    t = sanitize(str(title)) if title else ''
+                                    a = format_authors_for_filename(normalize_authors(authors), max_authors=3) if authors else ''
+                                    if a and t:
+                                        new = f"{a} - {t}{p.suffix}"
+                                    elif t:
+                                        new = f"{t}{p.suffix}"
+                                    elif a:
+                                        new = f"{a}{p.suffix}"
+                                    else:
+                                        new = p_name
+                                    self.entries.append((sp, p_name, new, fh, size, title, authors))
+                                    iid = f'i{self._next_iid}'
+                                    self._next_iid += 1
+                                    self.tree.insert('', 'end', iid=iid, values=(p_name, new, human_readable_size(size)))
+                                    self.item_map[iid] = idx
+                                    if fh:
+                                        local_sha_map.setdefault(fh, []).append(iid)
+                                self.root.after(0, add_row_to_tree)
+                            # after scanning, mark duplicates found in incremental pass
+                            for h, iids in local_sha_map.items():
+                                if len(iids) > 1:
+                                    for ii in iids:
+                                        try:
+                                            existing = set(self.tree.item(ii, 'tags') or ())
+                                            existing.add('dup')
+                                            self.tree.item(ii, tags=tuple(existing))
+                                        except Exception:
+                                            pass
+                            conn.close()
+                            # final UI update
+                            def on_done_inc():
+                                self.status.set('Escaneo incremental completado')
+                            self.root.after(0, on_done_inc)
+                        except Exception:
+                            pass
+
+                    t_inc = threading.Thread(target=incremental_worker, args=(folder_path,), daemon=True)
+                    t_inc.start()
+                    return
+        except Exception:
+            pass
 
         def file_hash(path, block_size=65536):
             h = hashlib.sha256()
@@ -214,7 +370,8 @@ class RenamerApp:
         conflicts = []
         for orig, disp, new, fh, sz, title, author in list(self.entries):
             src = Path(orig)
-            dst = Path(folder) / new
+            safe_new = sanitize(new)
+            dst = Path(folder) / safe_new
             if dst.exists():
                 base = dst.stem
                 idx = 1
@@ -254,7 +411,8 @@ class RenamerApp:
                     continue
                 orig, disp, proposed, fh, sz, title, author = self.entries[idx]
                 p = Path(orig)
-                dst = p.with_suffix('.epub')
+                # sanitize the output epub name (remove control chars from original stem)
+                dst = p.with_name(sanitize(p.stem) + '.epub')
                 if dst.exists():
                     base = dst.stem
                     i = 1
@@ -367,6 +525,8 @@ class RenamerApp:
             else:
                 newname = disp or os.path.basename(orig)
 
+            # sanitize the final filename proposal to avoid invalid chars
+            newname = sanitize(newname)
             if newname != proposed:
                 self.entries[idx] = (orig, disp, newname, fh, sz, final_title, final_author)
                 changed += 1

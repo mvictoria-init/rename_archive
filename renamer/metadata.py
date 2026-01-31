@@ -7,7 +7,12 @@ from .utils import normalize_authors
 def extract_pdf_metadata(path):
     try:
         from PyPDF2 import PdfReader
-        reader = PdfReader(path)
+        # suppress noisy messages from PyPDF2 by redirecting stderr temporarily
+        import os
+        import contextlib
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stderr(devnull):
+                reader = PdfReader(path)
         info = reader.metadata
         title = None
         author = None
