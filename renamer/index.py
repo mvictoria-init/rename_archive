@@ -45,6 +45,21 @@ def files_in_folder(folder: Path) -> Iterator[dict]:
     conn.close()
 
 
+def find_files_by_hash(sha256: str) -> list[dict]:
+    """Return list of dicts for files with the given SHA256."""
+    if not db_exists():
+        return []
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute('SELECT path,size,sha256,title,authors FROM files WHERE sha256 = ?', (sha256,))
+    rows = []
+    for row in cur.fetchall():
+        path, size, sha, title, authors = row
+        rows.append({'path': path, 'size': size, 'sha256': sha, 'title': title, 'authors': authors})
+    conn.close()
+    return rows
+
+
 def os_sep() -> str:
     # sqlite LIKE expects backslashes to match literally; return os-specific separator
     import os

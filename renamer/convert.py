@@ -1,8 +1,21 @@
 from pathlib import Path
 import io
 import html
-from ebooklib import epub
-from PyPDF2 import PdfReader
+import os
+import contextlib
+
+try:
+    from ebooklib import epub
+    _HAS_EBOOKLIB = True
+except ImportError:
+    _HAS_EBOOKLIB = False
+
+try:
+    from PyPDF2 import PdfReader
+    _HAS_PYPDF2 = True
+except ImportError:
+    _HAS_PYPDF2 = False
+
 try:
     import fitz  # PyMuPDF
     _HAS_FITZ = True
@@ -39,6 +52,11 @@ def pdf_to_epub(pdf_path, epub_path, title=None, authors=None):
         (True, None) on success or (False, error_message) on failure.
     """
     try:
+        if not _HAS_PYPDF2:
+            return False, "PyPDF2 is not installed."
+        if not _HAS_EBOOKLIB:
+            return False, "EbookLib is not installed."
+
         pdf_path = Path(pdf_path)
         epub_path = Path(epub_path)
 
@@ -354,6 +372,9 @@ def convert_to_epub(input_path, epub_path, title=None, authors=None):
     Supports: .pdf, .docx, .html/.htm, .txt. For PDF it prefers `pdf_to_epub`,
     but will fall back to text extraction if PDF parsing fails.
     """
+    if not _HAS_EBOOKLIB:
+        return False, "EbookLib module not installed."
+
     p = Path(input_path)
     suffix = p.suffix.lower()
     # If PDF, try our existing converter first

@@ -86,6 +86,7 @@ class RenamerApp:
 
         # mapping from tree item id to entries index
         self.item_map = {}
+        self.entries = []
         self._next_iid = 0
         # UI bindings
         self.tree.bind('<<TreeviewSelect>>', lambda e: self.on_select())
@@ -110,6 +111,207 @@ class RenamerApp:
         self.refine_btn.pack(side='left', padx=6)
         self.model_btn = ttk.Button(bottom, text='Sugerir (modelo)', command=self.suggest_with_model)
         self.model_btn.pack(side='left', padx=6)
+        self.check_lib_dups_btn = ttk.Button(bottom, text='VS Biblioteca', command=self.check_library_duplicates)
+        self.check_lib_dups_btn.pack(side='left', padx=6)
+        
+        # New button
+        self.set_lib_btn = ttk.Button(bottom, text='Sel. Biblioteca', command=self.select_library_folder)
+        self.set_lib_btn.pack(side='left', padx=6)
+
+    def select_library_folder(self):
+        d = filedialog.askdirectory(title='Seleccionar carpeta de Biblioteca')
+        if not d:
+            return
+        
+        path = Path(d)
+        ans = messagebox.askyesno('Indexar Biblioteca', f'¿Desea indexar ahora la carpeta:\n{d}?\n\nEsto puede tardar unos minutos pero permitirá comparar duplicados.')
+        if not ans:
+            return
+
+        self.status.set('Indexando biblioteca...')
+        self.set_lib_btn.state(['disabled'])
+        self.check_lib_dups_btn.state(['disabled']) # Disable check while indexing
+        
+        def run_indexer():
+            try:
+                # Import here to avoid circular imports or early init
+                # We need to add scripts folder to path or simple use indexer.py logic?
+                # indexer.py is in scripts/. We can add scripts/ to sys.path or direct import if we moved logic.
+                # But earlier we saw `scripts/indexer.py`.
+                # Let's import dynamically
+                import sys
+                root_proj = Path(__file__).resolve().parent.parent
+                scripts_path = root_proj / 'scripts'
+                if str(scripts_path) not in sys.path:
+                    sys.path.insert(0, str(scripts_path))
+                
+                from indexer import walk_and_index
+                
+                walk_and_index(path, workers=4, force_reindex=False)
+                
+                def done():
+                    self.status.set('Biblioteca indexada correctamente.')
+                    messagebox.showinfo('Biblioteca', 'Indexado completado.\nYa puede usar la opción "VS Biblioteca".')
+                    self.set_lib_btn.state(['!disabled'])
+                    self.check_lib_dups_btn.state(['!disabled'])
+                
+                self.root.after(0, done)
+                
+            except Exception as e:
+                def err():
+                    messagebox.showerror('Error', f'Falló el indexado: {e}')
+                    self.status.set('Error en indexado.')
+                    self.set_lib_btn.state(['!disabled'])
+                    self.check_lib_dups_btn.state(['!disabled'])
+                self.root.after(0, err)
+
+        t = threading.Thread(target=run_indexer, daemon=True)
+        t.start()
+
+    def check_library_duplicates(self):
+        from .index import find_files_by_hash
+        # Collect current hashes
+        local_hashes = {}
+        for entry in self.entries:
+            orig, disp, new, fh, sz, title, author = entry
+            if fh:
+                local_hashes[fh] = orig
+        
+        if not local_hashes:
+            messagebox.showinfo('Info', 'No hay archivos con hash para comprobar o lista vacía.')
+            return
+
+        duplicates_found = [] # (local_path, remote_info_dict)
+
+        self.status.set('Comprobando duplicados en biblioteca...')
+        
+        # Check against DB
+        # To avoid UI freeze, could be thread, but let's do simple loop first as DB is local and fast enough for <1000 files
+        for fh, local_path in local_hashes.items():
+            matches = find_files_by_hash(fh)
+            # matches includes the file itself if it was already indexed!
+            # so checking path equality is crucial
+            remotes = []
+            for m in matches:
+                # normalize paths for comparison
+                p1 = os.path.normpath(str(m['path'])).lower()
+                p2 = os.path.normpath(str(local_path)).lower()
+                if p1 != p2:
+                    remotes.append(m)
+            
+            if remotes:
+                duplicates_found.append((local_path, remotes))
+        
+        self.status.set('')
+        
+        if not duplicates_found:
+            messagebox.showinfo('Info', 'No se encontraron duplicados externos en la biblioteca.')
+            return
+
+        # Dialog to resolve
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f'Conflicto con Biblioteca - {len(duplicates_found)} archivos')
+        dlg.geometry('900x600')
+
+        container = ttk.Frame(dlg)
+        container.pack(fill='both', expand=True)
+        
+        canvas = tk.Canvas(container)
+        scrollbar = ttk.Scrollbar(container, orient='vertical', command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+        
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        # Dictionary valid_items[local_path] = IntVar(value=0:keep_local, 1:keep_remote, 2:keep_both)
+        # But wait, user wants to CHOOSE which one to keep
+        # If I keep local => Delete remote?
+        # If I keep remote => Delete local?
+        
+        # Let's group by conflict
+        
+        actions = {} # local_path -> StringVar(value='keep_local'/'keep_remote'/'keep_both')
+        
+        for idx, (local_p, remotes) in enumerate(duplicates_found):
+            lf = ttk.LabelFrame(scroll_frame, text=f'Conflicto {idx+1}: {os.path.basename(local_p)}')
+            lf.pack(fill='x', padx=10, pady=5, anchor='n')
+            
+            # Show info
+            info_frame = ttk.Frame(lf)
+            info_frame.pack(fill='x', padx=5, pady=2)
+            
+            # Local info
+            l_lbl = ttk.Label(info_frame, text=f"LOCAL (Aquí): {local_p}", foreground='blue')
+            l_lbl.pack(anchor='w')
+            
+            # Remote info (could be multiple, just show first few)
+            for r in remotes:
+                r_path = r['path']
+                r_lbl = ttk.Label(info_frame, text=f"BIBLIOTECA: {r_path}", foreground='red')
+                r_lbl.pack(anchor='w')
+
+            # Actions
+            act_var = tk.StringVar(value='keep_both')
+            actions[local_p] = (act_var, remotes)
+            
+            act_frame = ttk.Frame(lf)
+            act_frame.pack(fill='x', padx=5, pady=2)
+            
+            ttk.Radiobutton(act_frame, text='Conservar ambos (No hacer nada)', variable=act_var, value='keep_both').pack(side='left', padx=5)
+            ttk.Radiobutton(act_frame, text='Conservar LOCAL (Borrar de biblioteca)', variable=act_var, value='keep_local').pack(side='left', padx=5)
+            ttk.Radiobutton(act_frame, text='Conservar BIBLIOTECA (Borrar local)', variable=act_var, value='keep_remote').pack(side='left', padx=5)
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(fill='x', pady=10)
+        
+        def apply():
+            deleted_local = 0
+            deleted_remote = 0
+            errors = []
+            
+            for local_p, (var, remote_list) in actions.items():
+                choice = var.get()
+                if choice == 'keep_both':
+                    continue
+                elif choice == 'keep_remote':
+                    # Delete local
+                    try:
+                        if os.path.exists(local_p):
+                            os.remove(local_p)
+                            deleted_local += 1
+                    except Exception as e:
+                        errors.append(f"Error borrando local {local_p}: {e}")
+                elif choice == 'keep_local':
+                    # Delete remotes
+                    for r in remote_list:
+                        rp = r['path']
+                        try:
+                            if os.path.exists(rp):
+                                os.remove(rp)
+                                deleted_remote += 1
+                        except Exception as e:
+                            errors.append(f"Error borrando remoto {rp}: {e}")
+            
+            dlg.destroy()
+            
+            msg = []
+            if deleted_local: msg.append(f"Eliminados {deleted_local} archivos locales.")
+            if deleted_remote: msg.append(f"Eliminados {deleted_remote} archivos de la biblioteca.")
+            if errors: msg.append(f"Errores:\n" + "\n".join(errors[:5]))
+            
+            if msg:
+                messagebox.showinfo('Resultado', '\n'.join(msg))
+                self.scan() # Refresh local view
+            else:
+                messagebox.showinfo('Resultado', 'No se realizaron cambios.')
+
+        ttk.Button(btn_frame, text='Cancelar', command=dlg.destroy).pack(side='right', padx=10)
+        ttk.Button(btn_frame, text='Aplicar acciones', command=apply).pack(side='right', padx=10)
 
     def suggest_with_model(self, auto: bool = False, max_dist: float = 0.6):
         sels = self.tree.selection()
@@ -706,65 +908,108 @@ class RenamerApp:
             return
 
         dlg = tk.Toplevel(self.root)
-        dlg.title('Seleccionar copias a conservar')
-        dlg.geometry('800x500')
-        frm = ttk.Frame(dlg)
-        frm.pack(fill='both', expand=True)
+        dlg.title('Gestionar duplicados - Seleccione archivos para ELIMINAR')
+        dlg.geometry('900x600')
+        
+        main_container = ttk.Frame(dlg)
+        main_container.pack(fill='both', expand=True)
 
-        canvas = tk.Canvas(frm)
-        scrollbar = ttk.Scrollbar(frm, orient='vertical', command=canvas.yview)
+        canvas = tk.Canvas(main_container)
+        scrollbar = ttk.Scrollbar(main_container, orient='vertical', command=canvas.yview)
         scroll_frame = ttk.Frame(canvas)
-        scroll_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0,0), window=scroll_frame, anchor='nw')
+
+        # Ensure resizing works
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+        
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+
+        def configure_canvas(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+
+        canvas.bind("<Configure>", configure_canvas)
         canvas.configure(yscrollcommand=scrollbar.set)
+        
         canvas.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
 
-        group_vars = {}
+        delete_vars = {}
         group_info = []
         for h, items in dup_groups.items():
             group_info.append((h, items))
 
         for gi, (h, items) in enumerate(group_info):
+            # Try to distinguish groups visually
             lf = ttk.LabelFrame(scroll_frame, text=f'Grupo {gi+1} — {len(items)} archivos')
-            lf.pack(fill='x', padx=6, pady=6, anchor='n')
-            var = tk.IntVar(value=0)
-            max_idx = 0
-            max_size = -1
-            for idx, (p, sz) in enumerate(items):
-                if sz and sz > max_size:
-                    max_size = sz
-                    max_idx = idx
-            var.set(max_idx)
-            group_vars[h] = var
-            for idx, (p, sz) in enumerate(items):
-                text = f"{os.path.basename(p)} — {human_readable_size(sz)}\n{p}"
-                rb = ttk.Radiobutton(lf, text=text, variable=var, value=idx)
-                rb.pack(fill='x', padx=4, pady=2, anchor='w')
+            lf.pack(fill='x', padx=10, pady=5, anchor='n')
+            
+            # Simple heuristic: uncheck (keep) the first one found, or check by length?
+            # Let's verify file existence to be safe
+            valid_items = []
+            for p, sz in items:
+                if os.path.exists(p):
+                    valid_items.append((p, sz))
+            
+            if not valid_items:
+                continue
+
+            # Pick "best" to keep -> unchecked. Default: Keep first one.
+            # Could improve to keep longest name or largest size.
+            best_idx = 0
+            # Example: keep the one with longest filename length (assuming more descriptive)
+            max_len = -1
+            for idx, (p, sz) in enumerate(valid_items):
+                if len(os.path.basename(p)) > max_len:
+                    max_len = len(os.path.basename(p))
+                    best_idx = idx
+            
+            for idx, (p, sz) in enumerate(valid_items):
+                should_delete = (idx != best_idx)
+                var = tk.BooleanVar(value=should_delete)
+                delete_vars[p] = var
+                
+                # Checkbox
+                chk = ttk.Checkbutton(lf, text=f"{os.path.basename(p)}\n{p}", variable=var, onvalue=True, offvalue=False)
+                chk.pack(fill='x', padx=4, pady=2, anchor='w')
 
         btns = ttk.Frame(dlg)
-        btns.pack(fill='x', pady=6)
+        btns.pack(fill='x', pady=10)
+        
         def on_cancel():
             dlg.destroy()
+            
         def on_apply():
+            files_to_delete = [p for p, var in delete_vars.items() if var.get()]
+            if not files_to_delete:
+                messagebox.showinfo('Info', 'No se seleccionaron archivos para eliminar.')
+                return
+
+            if not messagebox.askyesno('Confirmar', f'¿Está seguro de eliminar {len(files_to_delete)} archivos permanentemente?'):
+                return
+
             errors = []
             deleted = 0
-            for h, items in group_info:
-                keep_idx = group_vars[h].get()
-                for idx, (p, sz) in enumerate(items):
-                    if idx == keep_idx:
-                        continue
-                    try:
+            for p in files_to_delete:
+                try:
+                    if os.path.exists(p):
                         os.remove(p)
                         deleted += 1
-                    except Exception as e:
-                        errors.append((p, e))
+                except Exception as e:
+                    errors.append((p, e))
+            
             dlg.destroy()
+            
             if errors:
-                messagebox.showerror('Errores', f'Ocurrieron errores al eliminar {len(errors)} archivos')
-            else:
-                messagebox.showinfo('Listo', f'Eliminados {deleted} archivos duplicados')
-            self.scan()
+                msg = '\n'.join([f"{os.path.basename(p)}: {e}" for p, e in errors[:5]])
+                messagebox.showerror('Errores', f'Ocurrieron errores al eliminar {len(errors)} archivos:\n{msg}')
+            
+            if deleted > 0:
+                messagebox.showinfo('Listo', f'Eliminados {deleted} archivos duplicados.')
+                self.scan()
 
         ttk.Button(btns, text='Cancelar', command=on_cancel).pack(side='right', padx=6)
         ttk.Button(btns, text='Eliminar seleccionados', command=on_apply).pack(side='right')
