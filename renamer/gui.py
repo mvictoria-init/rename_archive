@@ -6,12 +6,14 @@ import hashlib
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from datetime import datetime
 
 from .utils import sanitize, normalize_authors, format_authors_for_filename, human_readable_size
 from .metadata import extract_metadata
 from .convert import pdf_to_epub, convert_to_epub
+from .infer import suggest_for_file
 import sqlite3
-from .index import db_exists, files_in_folder
+from .index import db_exists, files_in_folder, DB_PATH
 
 
 class RenamerApp:
@@ -19,6 +21,10 @@ class RenamerApp:
         self.root = root
         root.title('Renombrador por Autor y Título')
         self.folder = tk.StringVar()
+        # hilo de escaneo actual (para evitar overlaps)
+        self._scan_thread = None
+        # activar sugerencias automáticas del modelo al terminar un escaneo
+        self.auto_suggest_on_scan = True
 
         frm = ttk.Frame(root, padding=10)
         frm.pack(fill='both', expand=True)
@@ -101,9 +107,86 @@ class RenamerApp:
         self.delete_file_btn.pack(side='left', padx=6)
         self.refine_btn = ttk.Button(bottom, text='Refinar propuesta', command=self.refine_selected_proposals)
         self.refine_btn.pack(side='left', padx=6)
+        self.model_btn = ttk.Button(bottom, text='Sugerir (modelo)', command=self.suggest_with_model)
+        self.model_btn.pack(side='left', padx=6)
 
-        self._scan_thread = None
-        self.entries = []
+    def suggest_with_model(self, auto: bool = False):
+        sels = self.tree.selection()
+        target_idxs = []
+        if sels:
+            for iid in sels:
+                idx = self.item_map.get(iid)
+                if idx is not None and idx < len(self.entries):
+                    target_idxs.append(idx)
+        else:
+            target_idxs = list(range(len(self.entries)))
+
+        if not target_idxs:
+            if not auto:
+                messagebox.showinfo('Modelo', 'No hay elementos para sugerir.')
+            return
+
+        self.model_btn.state(['disabled'])
+        self.status.set('Generando sugerencias...')
+
+        def worker():
+            updated = 0
+            errors = []
+            for idx in target_idxs:
+                try:
+                    orig, disp, proposed, fh, sz, title, author = self.entries[idx]
+                    p = Path(orig)
+                    suggestions = suggest_for_file(p, top=3)
+                    if not suggestions:
+                        continue
+                    # elegir la propuesta más cercana (menor distancia) que no sea vacía
+                    best = None
+                    for dist, prop in suggestions:
+                        if prop:
+                            best = prop
+                            break
+                    if not best:
+                        continue
+                    newname = sanitize(best + p.suffix)
+                    if newname != proposed:
+                        self.entries[idx] = (orig, disp, newname, fh, sz, title, author)
+                        updated += 1
+                except Exception as e:
+                    errors.append(str(e))
+
+            def on_done():
+                # refrescar visibles
+                for iid, i in list(self.item_map.items()):
+                    if i < len(self.entries):
+                        orig, disp, proposed, fh, sz, title, author = self.entries[i]
+                        try:
+                            self.tree.item(iid, values=(disp, proposed, human_readable_size(sz)))
+                        except Exception:
+                            pass
+                self.model_btn.state(['!disabled'])
+                if errors and not auto:
+                    messagebox.showwarning('Modelo', f'Sugerencias completadas con {len(errors)} errores (ver consola).')
+                elif not errors and not auto:
+                    messagebox.showinfo('Modelo', f'Actualizadas {updated} propuestas con el modelo')
+                self.status.set('')
+
+            self.root.after(0, on_done)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _maybe_auto_model(self):
+        # evita disparar si ya hay un hilo en marcha o si el botón está deshabilitado
+        if not getattr(self, 'auto_suggest_on_scan', False):
+            return
+        try:
+            state = self.model_btn.state()
+            if 'disabled' in state:
+                return
+        except Exception:
+            return
+        # lanzar en el siguiente ciclo del loop principal para no bloquear el evento actual
+        self.root.after(10, lambda: self.suggest_with_model(auto=True))
 
     def select_folder(self):
         d = filedialog.askdirectory()
@@ -180,6 +263,9 @@ class RenamerApp:
                     except Exception:
                         pass
 
+                    # sugerir con modelo automáticamente si está habilitado
+                    self._maybe_auto_model()
+
                     # start incremental background worker to detect new/changed files
                     def incremental_worker(folder_path):
                         try:
@@ -223,13 +309,16 @@ class RenamerApp:
                                     if isinstance(meta, dict):
                                         title = meta.get('title')
                                         authors = meta.get('authors')
+                                    elif isinstance(meta, (tuple, list)) and len(meta) >= 2:
+                                        title, authors = meta[0], meta[1]
                                 except Exception:
+                                    # indexeo tolerante: si falla metadata, seguimos con valores vacíos
                                     pass
                                 # upsert into DB
-                                now = datetime.utcnow().isoformat()
+                                indexed_at = datetime.utcnow().isoformat()
                                 try:
                                     cur.execute('INSERT OR REPLACE INTO files(path,relpath,size,mtime,sha256,title,authors,indexed_at) VALUES(?,?,?,?,?,?,?,?)',
-                                                (sp, str(p.relative_to(folder_path)), size, mtime, fh, str(authors) if authors else None, now, None))
+                                                (sp, str(p.relative_to(folder_path)), size, mtime, fh, title, str(authors) if authors else None, indexed_at))
                                     conn.commit()
                                 except Exception:
                                     pass
@@ -351,6 +440,8 @@ class RenamerApp:
                     self.tree.tag_configure('dup', background='#ffdce0')
                 except Exception:
                     pass
+                # sugerir con modelo automáticamente si está habilitado
+                self._maybe_auto_model()
 
             self.root.after(0, on_done)
 

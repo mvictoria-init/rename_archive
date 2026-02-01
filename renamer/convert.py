@@ -72,16 +72,6 @@ def pdf_to_epub(pdf_path, epub_path, title=None, authors=None):
         # try to extract first-page image as cover (optional, requires PyMuPDF)
         reader = PdfReader(str(pdf_path))
 
-        book = epub.EpubBook()
-        if title:
-            book.set_title(title)
-        if authors:
-            try:
-                for a in authors:
-                    book.add_author(a)
-            except Exception:
-                book.add_author(str(authors))
-
         # If PyMuPDF is available, attempt a richer extraction: headings, paragraphs and images.
         chapters = []
         # map PDF page index -> chapter index (used later to map TOC entries to chapter files)

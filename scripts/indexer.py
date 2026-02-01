@@ -14,6 +14,18 @@ from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
+import contextlib
+
+try:
+    import fitz  # PyMuPDF
+    _HAS_FITZ = True
+except Exception:
+    _HAS_FITZ = False
+try:
+    from PyPDF2 import PdfReader
+    _HAS_PYPDF2 = True
+except Exception:
+    _HAS_PYPDF2 = False
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT / 'data'
@@ -33,6 +45,10 @@ BUF_SIZE = 65536
 def ensure_db():
     DB_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL;')
+    except Exception:
+        pass
     cur = conn.cursor()
     cur.execute('''
     CREATE TABLE IF NOT EXISTS files (
@@ -57,6 +73,17 @@ def ensure_db():
     cur.execute('CREATE INDEX IF NOT EXISTS idx_files_sha ON files(sha256)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime)')
     conn.commit()
+    conn.close()
+    # Do not return a connection: each worker thread will open its own connection
+    return None
+
+
+def _open_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL;')
+    except Exception:
+        pass
     return conn
 
 
@@ -71,25 +98,63 @@ def file_sha256(path: Path) -> str | None:
         return None
 
 
+def _extract_text_from_pdf(path: Path, max_pages: int = 4):
+    """Devuelve (partes, needs_ocr) tomando las primeras páginas."""
+    parts = []
+    needs_ocr = False
+    if _HAS_FITZ:
+        try:
+            doc = fitz.open(str(path))
+            pages = min(doc.page_count, max_pages)
+            for i in range(pages):
+                page = doc.load_page(i)
+                txt = page.get_text().strip()
+                if txt:
+                    parts.append(txt)
+            doc.close()
+        except Exception:
+            parts = []
+    if not parts and _HAS_PYPDF2:
+        try:
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stderr(devnull):
+                    reader = PdfReader(str(path))
+            pages = reader.pages[:max_pages]
+            for page in pages:
+                try:
+                    txt = page.extract_text() or ''
+                except Exception:
+                    txt = ''
+                if txt.strip():
+                    parts.append(txt.strip())
+        except Exception:
+            parts = []
+    total_chars = sum(len(p) for p in parts)
+    if total_chars < 80:
+        needs_ocr = True
+    return parts, needs_ocr
+
+
 def extract_text_for_index(path: Path):
     suffix = path.suffix.lower()
+    if suffix == '.pdf':
+        return _extract_text_from_pdf(path)
     if suffix == '.docx':
-        return _extract_text_from_docx(path)
+        return _extract_text_from_docx(path), False
     if suffix in ('.html', '.htm'):
-        return _extract_text_from_html(path)
+        return _extract_text_from_html(path), False
     if suffix == '.txt':
-        return _extract_text_from_txt(path)
+        return _extract_text_from_txt(path), False
     # fallback: try reading raw text
     try:
         txt = path.read_text(encoding='utf-8', errors='ignore')
-        # split into paragraphs
         parts = [p.strip() for p in txt.split('\n\n') if p.strip()][:10]
-        return parts
+        return parts, False
     except Exception:
-        return []
+        return [], False
 
 
-def index_file(conn: sqlite3.Connection, root_folder: Path, path: Path, force_reindex=False):
+def index_file(root_folder: Path, path: Path, force_reindex=False):
     rel = str(path.relative_to(root_folder))
     stat = None
     try:
@@ -98,47 +163,69 @@ def index_file(conn: sqlite3.Connection, root_folder: Path, path: Path, force_re
         return False, 'stat_failed'
     size = stat.st_size
     mtime = stat.st_mtime
+    # Open a dedicated DB connection for this thread/task
+    conn = _open_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT id,size,mtime,sha256 FROM files WHERE path=?', (str(path),))
     row = cur.fetchone()
     if row and not force_reindex:
         fid, old_size, old_mtime, old_sha = row
         if old_size == size and abs(old_mtime - mtime) < 1.0:
+            conn.close()
             return False, 'skipped'
     # compute sha256
     sha = file_sha256(path)
     title, authors = (None, None)
     try:
         meta = extract_metadata(path)
-        title = meta.get('title') if isinstance(meta, dict) else None
-        authors = meta.get('authors') if isinstance(meta, dict) else None
+        if isinstance(meta, dict):
+            title = meta.get('title')
+            authors = meta.get('authors')
+        elif isinstance(meta, (tuple, list)) and len(meta) >= 2:
+            # extract_metadata en este proyecto suele devolver (title, author)
+            title, authors = meta[0], meta[1]
     except Exception:
+        # si la metadata falla continuamos con valores vacíos para no frenar el indexado
         pass
+    # normalizar tipos para sqlite (evitar IndirectObject u otros)
+    if title is not None and not isinstance(title, str):
+        try:
+            title = str(title)
+        except Exception:
+            title = None
+    if authors is not None and not isinstance(authors, str):
+        try:
+            authors = str(authors)
+        except Exception:
+            authors = None
+    # extract text blocks (limit to first 10 blocks and first 5000 chars cada uno)
+    parts, needs_ocr = extract_text_for_index(path)
+    parts = parts[:10]
+
     # insert or update file row
     now = datetime.utcnow().isoformat()
     if row:
-        cur.execute('''UPDATE files SET relpath=?, size=?, mtime=?, sha256=?, title=?, authors=?, indexed_at=? WHERE id=?''',
-                    (rel, size, mtime, sha, str(authors) if authors else None, now, row[0]))
+        cur.execute('''UPDATE files SET relpath=?, size=?, mtime=?, sha256=?, title=?, authors=?, needs_ocr=?, indexed_at=? WHERE id=?''',
+                    (rel, size, mtime, sha, title, authors, 1 if needs_ocr else 0, now, row[0]))
         fid = row[0]
         cur.execute('DELETE FROM texts WHERE file_id=?', (fid,))
     else:
-        cur.execute('''INSERT OR REPLACE INTO files(path,relpath,size,mtime,sha256,title,authors,indexed_at) VALUES(?,?,?,?,?,?,?,?)''',
-                    (str(path), rel, size, mtime, sha, title, str(authors) if authors else None, now))
+        cur.execute('''INSERT OR REPLACE INTO files(path,relpath,size,mtime,sha256,title,authors,needs_ocr,indexed_at) VALUES(?,?,?,?,?,?,?,?,?)''',
+                    (str(path), rel, size, mtime, sha, title, authors, 1 if needs_ocr else 0, now))
         fid = cur.lastrowid
-
-    # extract text blocks (limit to first 10 blocks and first 5000 chars each)
-    parts = extract_text_for_index(path)[:10]
     for i, block in enumerate(parts):
         if not block:
             continue
         text = str(block)[:5000]
         cur.execute('INSERT INTO texts(file_id,block_index,text) VALUES(?,?,?)', (fid, i, text))
     conn.commit()
+    conn.close()
     return True, 'indexed'
 
 
 def walk_and_index(root_folder: Path, workers=6, force_reindex=False):
-    conn = ensure_db()
+    # ensure DB/tables exist
+    ensure_db()
     files = []
     for p in root_folder.rglob('*'):
         if p.is_file():
@@ -146,7 +233,7 @@ def walk_and_index(root_folder: Path, workers=6, force_reindex=False):
     total = len(files)
     print(f'Found {total} files; indexing with {workers} workers')
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(index_file, conn, root_folder, p, force_reindex): p for p in files}
+        futures = {ex.submit(index_file, root_folder, p, force_reindex): p for p in files}
         done = 0
         for fut in as_completed(futures):
             p = futures[fut]
@@ -157,7 +244,6 @@ def walk_and_index(root_folder: Path, workers=6, force_reindex=False):
             done += 1
             if done % 50 == 0 or not ok:
                 print(f'[{done}/{total}] {p} -> {msg}')
-    conn.close()
     print('Indexing completed')
 
 

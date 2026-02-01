@@ -23,6 +23,22 @@ def extract_pdf_metadata(path):
             else:
                 title = getattr(info, 'title', None)
                 author = getattr(info, 'author', None)
+        # algunos objetos de PyPDF2 son IndirectObject; forzar a str si no son str
+        if title is not None and not isinstance(title, str):
+            try:
+                title = str(title)
+            except Exception:
+                title = None
+        if author is not None and not isinstance(author, str):
+            try:
+                author = str(author)
+            except Exception:
+                author = None
+        # limpiar valores basura típicos de PyPDF2 (IndirectObject)
+        if isinstance(title, str) and 'IndirectObject' in title:
+            title = None
+        if isinstance(author, str) and 'IndirectObject' in author:
+            author = None
         author = normalize_authors(author)
         title = title.strip() if title and isinstance(title, str) else title
         if not title or not author:
@@ -63,7 +79,11 @@ def extract_docx_metadata(path):
 def extract_epub_metadata(path):
     try:
         from ebooklib import epub
-        book = epub.read_epub(path)
+        import contextlib, os
+        # suppress noisy stderr from underlying parsers
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stderr(devnull):
+                book = epub.read_epub(path)
         titles = book.get_metadata('DC', 'title')
         creators = book.get_metadata('DC', 'creator')
         title = None
@@ -75,17 +95,26 @@ def extract_epub_metadata(path):
             author = normalize_authors(auths)
         return (title, author)
     except Exception:
+        # Fallback: attempt tolerant ZIP/OPF parsing and liberal decoding
         try:
             z = zipfile.ZipFile(path)
             opf_path = None
             if 'META-INF/container.xml' in z.namelist():
                 import xml.etree.ElementTree as ET
-                cont = z.read('META-INF/container.xml')
-                root = ET.fromstring(cont)
-                ns = {'c': 'urn:oasis:names:tc:opendocument:xmlns:container'}
-                rf = root.find('.//c:rootfile', ns)
-                if rf is not None:
-                    opf_path = rf.get('full-path')
+                try:
+                    cont = z.read('META-INF/container.xml')
+                    # try utf-8, else latin-1
+                    try:
+                        cont_s = cont.decode('utf-8')
+                    except Exception:
+                        cont_s = cont.decode('latin-1', errors='replace')
+                    root = ET.fromstring(cont_s)
+                    ns = {'c': 'urn:oasis:names:tc:opendocument:xmlns:container'}
+                    rf = root.find('.//c:rootfile', ns)
+                    if rf is not None:
+                        opf_path = rf.get('full-path')
+                except Exception:
+                    opf_path = None
             if not opf_path:
                 for name in z.namelist():
                     if name.endswith('.opf'):
@@ -94,7 +123,12 @@ def extract_epub_metadata(path):
             if opf_path:
                 data = z.read(opf_path)
                 import xml.etree.ElementTree as ET
-                root = ET.fromstring(data)
+                # decode with fallback
+                try:
+                    data_s = data.decode('utf-8')
+                except Exception:
+                    data_s = data.decode('latin-1', errors='replace')
+                root = ET.fromstring(data_s)
                 title = None
                 author = None
                 for elem in root.iter():
