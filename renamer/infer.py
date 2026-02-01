@@ -116,8 +116,8 @@ def get_text_snippet(path: Path, max_chars: int = 2000):
     return text
 
 
-def suggest_from_text(text: str, top: int = 3):
-    """Devuelve [(distancia, propuesta), ...] usando kNN."""
+def suggest_from_text(text: str, top: int = 3, max_dist: float = 0.6):
+    """Devuelve [(distancia, propuesta), ...] usando kNN, filtrando por max_dist."""
     if not text:
         return []
     vec, knn, props = load_model()
@@ -126,17 +126,35 @@ def suggest_from_text(text: str, top: int = 3):
     dists = dists[0]
     idxs = idxs[0]
     out = []
+    seen = set()
     for dist, idx in zip(dists, idxs):
+        if max_dist is not None and float(dist) > max_dist:
+            continue
         try:
             prop = props[idx]
         except Exception:
             prop = None
+        if not prop:
+            continue
+        key = prop.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
         out.append((float(dist), prop))
     return out
 
 
-def suggest_for_file(path: Path, top: int = 3):
+def suggest_for_file(path: Path, top: int = 3, max_dist: float = 0.6):
     text = get_text_snippet(path)
+    if not text and path.suffix.lower() == ".pdf":
+        # fallback: metadata básica para no quedarnos en blanco
+        try:
+            meta_title, meta_author = extract_pdf_metadata(path)
+            meta_parts = [p for p in [meta_title, meta_author] if p]
+            if meta_parts:
+                text = " \n".join(meta_parts)
+        except Exception:
+            text = None
     if not text:
         return []
-    return suggest_from_text(text, top=top)
+    return suggest_from_text(text, top=top, max_dist=max_dist)

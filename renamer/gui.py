@@ -24,7 +24,8 @@ class RenamerApp:
         # hilo de escaneo actual (para evitar overlaps)
         self._scan_thread = None
         # activar sugerencias automáticas del modelo al terminar un escaneo
-        self.auto_suggest_on_scan = True
+        # la dejamos desactivada por defecto para evitar propuestas masivas indeseadas
+        self.auto_suggest_on_scan = False
 
         frm = ttk.Frame(root, padding=10)
         frm.pack(fill='both', expand=True)
@@ -110,7 +111,7 @@ class RenamerApp:
         self.model_btn = ttk.Button(bottom, text='Sugerir (modelo)', command=self.suggest_with_model)
         self.model_btn.pack(side='left', padx=6)
 
-    def suggest_with_model(self, auto: bool = False):
+    def suggest_with_model(self, auto: bool = False, max_dist: float = 0.6):
         sels = self.tree.selection()
         target_idxs = []
         if sels:
@@ -136,7 +137,7 @@ class RenamerApp:
                 try:
                     orig, disp, proposed, fh, sz, title, author = self.entries[idx]
                     p = Path(orig)
-                    suggestions = suggest_for_file(p, top=3)
+                    suggestions = suggest_for_file(p, top=3, max_dist=max_dist)
                     if not suggestions:
                         continue
                     # elegir la propuesta más cercana (menor distancia) que no sea vacía
