@@ -256,7 +256,8 @@ class RenamerApp:
                 r_lbl.pack(anchor='w')
 
             # Actions
-            act_var = tk.StringVar(value='keep_both')
+            # Default is keep_remote because user prefers library version
+            act_var = tk.StringVar(value='keep_remote')
             actions[local_p] = (act_var, remotes)
             
             act_frame = ttk.Frame(lf)
