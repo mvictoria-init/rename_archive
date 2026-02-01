@@ -1,160 +1,106 @@
-"""Inferencia de nombres usando modelo TF-IDF + kNN guardado en data/models.
-
-Expone utilidades mínimas para cargar el modelo y generar propuestas
-aprovechando los extractores existentes.
-"""
-from pathlib import Path
-import pickle
 import os
-import contextlib
+import re
+import pickle
+import logging
+from pathlib import Path
+from .metadata import extract_metadata
+from .utils import normalize_authors, format_authors_for_filename, sanitize, guess_title_author_from_filename
 
-from renamer.convert import (
-    _extract_text_from_docx,
-    _extract_text_from_html,
-    _extract_text_from_txt,
-)
-from renamer.metadata import extract_pdf_metadata
-
+# Optional ML dependencies
 try:
-    import fitz  # PyMuPDF
-    _HAS_FITZ = True
-except Exception:
-    _HAS_FITZ = False
+    import numpy as np
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.neighbors import NearestNeighbors
+    HAS_ML = True
+except ImportError:
+    HAS_ML = False
 
-try:
-    from PyPDF2 import PdfReader
-    _HAS_PYPDF2 = True
-except Exception:
-    _HAS_PYPDF2 = False
+MODEL_DIR = Path(__file__).resolve().parent.parent / "data" / "models"
+VEC_PATH = MODEL_DIR / "vectorizer.pkl"
+KNN_PATH = MODEL_DIR / "knn.pkl"
+PROPS_PATH = MODEL_DIR / "proposals.pkl"
 
+_models_loaded = False
+_vec = None
+_knn = None
+_proposals = None
 
-MODELS_DIR = Path(__file__).resolve().parent.parent / "data" / "models"
-VEC_PATH = MODELS_DIR / "vectorizer.pkl"
-KNN_PATH = MODELS_DIR / "knn.pkl"
-PROPOSALS_PATH = MODELS_DIR / "proposals.pkl"
+def load_models():
+    global _models_loaded, _vec, _knn, _proposals
+    if _models_loaded:
+        return True
+    if not HAS_ML:
+        return False
+    if not (VEC_PATH.exists() and KNN_PATH.exists() and PROPS_PATH.exists()):
+        return False
+    try:
+        with VEC_PATH.open("rb") as f:
+            _vec = pickle.load(f)
+        with KNN_PATH.open("rb") as f:
+            _knn = pickle.load(f)
+        with PROPS_PATH.open("rb") as f:
+            _proposals = pickle.load(f)
+        _models_loaded = True
+        return True
+    except Exception as e:
+        print(f"Error loading models: {e}")
+        return False
 
+def suggest_for_file(filepath: str | Path):
+    """
+    Returns a suggested (filename, title, author) tuple for a given file.
+    If no good suggestion found, returns (current_filename, None, None).
+    """
+    path = Path(filepath)
+    ext = path.suffix
+    
+    # 1. Metadata check
+    title, author = extract_metadata(path)
+    
+    # 2. Heuristics from filename (often more reliable than internal metadata)
+    h_title, h_author = guess_title_author_from_filename(path.name)
+    
+    # Decide between metadata and heuristics
+    # If metadata Author looks like a real name (not "Microsoft Word" etc) prefer it
+    # But if heuristic author is present and metadata is "Unknown", use heuristic
+    
+    final_title = title or h_title
+    final_author = author or h_author
 
-_MODEL_CACHE = {
-    "vec": None,
-    "knn": None,
-    "props": None,
-}
-
-
-def load_model():
-    """Carga perezosa del vectorizador, knn y lista de propuestas."""
-    if _MODEL_CACHE["vec"] is not None:
-        return _MODEL_CACHE["vec"], _MODEL_CACHE["knn"], _MODEL_CACHE["props"]
-    if not (VEC_PATH.exists() and KNN_PATH.exists() and PROPOSALS_PATH.exists()):
-        raise FileNotFoundError("Modelos no encontrados en data/models; ejecuta prototype_knn.py --build")
-    with VEC_PATH.open("rb") as fh:
-        vec = pickle.load(fh)
-    with KNN_PATH.open("rb") as fh:
-        knn = pickle.load(fh)
-    with PROPOSALS_PATH.open("rb") as fh:
-        props = pickle.load(fh)
-    _MODEL_CACHE["vec"] = vec
-    _MODEL_CACHE["knn"] = knn
-    _MODEL_CACHE["props"] = props
-    return vec, knn, props
-
-
-def _extract_text_from_pdf(path: Path, max_pages: int = 4):
-    parts = []
-    if _HAS_FITZ:
+    # 3. ML / KNN check (if enabled and models exist)
+    # We strip common prefixes to get cleaner text for query
+    if HAS_ML and load_models():
         try:
-            doc = fitz.open(str(path))
-            pages = min(doc.page_count, max_pages)
-            for i in range(pages):
-                page = doc.load_page(i)
-                txt = page.get_text().strip()
-                if txt:
-                    parts.append(txt)
-            doc.close()
+            # simple text representation: just the cleaned filename for now
+            # In a real app, we might want to extract text content, but that's slow
+            query_text = path.stem + " " + str(final_title or "") + " " + str(final_author or "")
+            xq = _vec.transform([query_text])
+            dists, idxs = _knn.kneighbors(xq, n_neighbors=1)
+            dist = dists[0][0]
+            if dist < 0.3: # Threshold for similarity
+                idx = idxs[0][0]
+                best_proposal = _proposals[idx]
+                if best_proposal:
+                    # try to parse the proposal back into author/title
+                    # assuming "Author - Title" format
+                    parts = best_proposal.split(' - ', 1)
+                    if len(parts) == 2:
+                        return f"{best_proposal}{ext}", parts[1], parts[0]
+                    return f"{best_proposal}{ext}", None, None
         except Exception:
-            parts = []
-    if not parts and _HAS_PYPDF2:
-        try:
-            with open(os.devnull, "w") as devnull:
-                with contextlib.redirect_stderr(devnull):
-                    reader = PdfReader(str(path))
-            for page in reader.pages[:max_pages]:
-                try:
-                    txt = page.extract_text() or ""
-                except Exception:
-                    txt = ""
-                if txt.strip():
-                    parts.append(txt.strip())
-        except Exception:
-            parts = []
-    return parts
+            pass
 
+    # Fallback construction
+    t = sanitize(final_title) if final_title else ''
+    a = format_authors_for_filename(normalize_authors(final_author), max_authors=3) if final_author else ''
 
-def get_text_snippet(path: Path, max_chars: int = 2000):
-    """Extrae un texto breve para consulta al modelo."""
-    suffix = path.suffix.lower()
-    parts = []
-    if suffix == ".pdf":
-        parts = _extract_text_from_pdf(path)
-    elif suffix == ".docx":
-        parts = _extract_text_from_docx(path)
-    elif suffix in (".html", ".htm"):
-        parts = _extract_text_from_html(path)
-    elif suffix == ".txt":
-        parts = _extract_text_from_txt(path)
+    if a and t:
+        new_name = f"{a} - {t}{ext}"
+    elif t:
+        new_name = f"{t}{ext}"
+    elif a:
+        new_name = f"{a}{ext}"
     else:
-        try:
-            txt = path.read_text(encoding="utf-8", errors="ignore")
-            parts = [p.strip() for p in txt.split("\n\n") if p.strip()]
-        except Exception:
-            parts = []
-    if not parts:
-        return None
-    text = "\n\n".join(parts)
-    if len(text) > max_chars:
-        text = text[:max_chars]
-    return text
+        new_name = path.name
 
-
-def suggest_from_text(text: str, top: int = 3, max_dist: float = 0.6):
-    """Devuelve [(distancia, propuesta), ...] usando kNN, filtrando por max_dist."""
-    if not text:
-        return []
-    vec, knn, props = load_model()
-    Xq = vec.transform([text])
-    dists, idxs = knn.kneighbors(Xq, n_neighbors=top)
-    dists = dists[0]
-    idxs = idxs[0]
-    out = []
-    seen = set()
-    for dist, idx in zip(dists, idxs):
-        if max_dist is not None and float(dist) > max_dist:
-            continue
-        try:
-            prop = props[idx]
-        except Exception:
-            prop = None
-        if not prop:
-            continue
-        key = prop.strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append((float(dist), prop))
-    return out
-
-
-def suggest_for_file(path: Path, top: int = 3, max_dist: float = 0.6):
-    text = get_text_snippet(path)
-    if not text and path.suffix.lower() == ".pdf":
-        # fallback: metadata básica para no quedarnos en blanco
-        try:
-            meta_title, meta_author = extract_pdf_metadata(path)
-            meta_parts = [p for p in [meta_title, meta_author] if p]
-            if meta_parts:
-                text = " \n".join(meta_parts)
-        except Exception:
-            text = None
-    if not text:
-        return []
-    return suggest_from_text(text, top=top, max_dist=max_dist)
+    return sanitize(new_name), final_title, final_author

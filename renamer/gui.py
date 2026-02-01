@@ -305,15 +305,10 @@ class RenamerApp:
                                     fh = None
                                 title = None
                                 authors = None
+                                new_pro = None
                                 try:
-                                    meta = extract_metadata(p)
-                                    if isinstance(meta, dict):
-                                        title = meta.get('title')
-                                        authors = meta.get('authors')
-                                    elif isinstance(meta, (tuple, list)) and len(meta) >= 2:
-                                        title, authors = meta[0], meta[1]
+                                    new_pro, title, authors = suggest_for_file(p)
                                 except Exception:
-                                    # indexeo tolerante: si falla metadata, seguimos con valores vacíos
                                     pass
                                 # upsert into DB
                                 indexed_at = datetime.utcnow().isoformat()
@@ -327,16 +322,7 @@ class RenamerApp:
                                 def add_row_to_tree():
                                     idx = len(self.entries)
                                     p_name = p.name
-                                    t = sanitize(str(title)) if title else ''
-                                    a = format_authors_for_filename(normalize_authors(authors), max_authors=3) if authors else ''
-                                    if a and t:
-                                        new = f"{a} - {t}{p.suffix}"
-                                    elif t:
-                                        new = f"{t}{p.suffix}"
-                                    elif a:
-                                        new = f"{a}{p.suffix}"
-                                    else:
-                                        new = p_name
+                                    new = new_pro if new_pro else p_name
                                     self.entries.append((sp, p_name, new, fh, size, title, authors))
                                     iid = f'i{self._next_iid}'
                                     self._next_iid += 1
@@ -384,18 +370,7 @@ class RenamerApp:
             hash_map = {}
             for f in p.iterdir():
                 if f.is_file():
-                    title, author = extract_metadata(f)
-                    ext = f.suffix
-                    t = sanitize(str(title)) if title else ''
-                    a = format_authors_for_filename(normalize_authors(author), max_authors=3)
-                    if a and t:
-                        new = f"{a} - {t}{ext}"
-                    elif t:
-                        new = f"{t}{ext}"
-                    elif a:
-                        new = f"{a}{ext}"
-                    else:
-                        new = f.name
+                    new, title, author = suggest_for_file(f)
 
                     file_h = file_hash(str(f))
                     size_val = None

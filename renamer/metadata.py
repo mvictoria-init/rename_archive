@@ -5,6 +5,47 @@ from .utils import normalize_authors
 
 
 def extract_pdf_metadata(path):
+    # Try PyMuPDF (fitz) first as it is generally more robust
+    try:
+        import fitz
+        doc = fitz.open(path)
+        meta = doc.metadata
+        title = meta.get('title')
+        author = meta.get('author')
+        if not title or not author:
+            # simple text extraction fallback for first page
+            # often title is first line, author is second
+             if doc.page_count > 0:
+                p = doc[0]
+                # get text blocks
+                blocks = p.get_text("blocks")
+                blocks.sort(key=lambda b: b[1]) # sort by vertical position
+                lines = []
+                for b in blocks:
+                    # block text; b[4]
+                    txt = b[4].strip()
+                    if txt:
+                        lines.append(txt)
+                if not title and lines:
+                    title = lines[0].split('\n')[0]
+                if not author and len(lines) > 1:
+                    # heuristic: look for "By X" or just second line
+                    sec = lines[1].replace('\n', ' ')
+                    m = re.search(r'(?:by|por)\s+([\w\s\.]+)', sec, flags=re.IGNORECASE)
+                    if m:
+                        author = m.group(1)
+                    else:
+                        author = sec
+        doc.close()
+        author = normalize_authors(author)
+        title = title.strip() if title else title
+        return (title, author)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # Fallback to PyPDF2
     try:
         from PyPDF2 import PdfReader
         # suppress noisy messages from PyPDF2 by redirecting stderr temporarily
