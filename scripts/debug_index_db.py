@@ -1,10 +1,18 @@
+"""
+Pequeña utilidad para comprobar el estado de `data/index.db`.
+
+Imprime si la base de datos existe, el número de filas en la tabla
+`files` y muestra algunas rutas de ejemplo. Útil para depuración rápida.
+"""
+
 from pathlib import Path
 import sqlite3
-DB=Path('data/index.db')
+
+DB = Path('data/index.db')
 print('DB exists:', DB.exists())
 if DB.exists():
-    conn=sqlite3.connect(str(DB))
-    cur=conn.cursor()
+    conn = sqlite3.connect(str(DB))
+    cur = conn.cursor()
     try:
         cur.execute('SELECT count(*) FROM files')
         print('files_count=', cur.fetchone()[0])

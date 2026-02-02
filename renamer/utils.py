@@ -1,13 +1,24 @@
+"""
+Funciones utilitarias para normalizar nombres, autores y realizar
+heurísticas simples sobre nombres de fichero.
+
+Las funciones que se exportan aquí son usadas por el resto de la
+aplicación para producir nombres de fichero seguros, formatear autores
+para inclusión en el nombre y adivinar título/autor desde cadenas sucias.
+"""
+
 import re
 import os
 
 def sanitize(s: str) -> str:
-    """Return a filesystem-safe, human-friendly string.
+        """
+        Normaliza una cadena para uso como nombre de fichero.
 
-    This removes control characters, reserved Windows filename characters,
-    trims trailing spaces/dots, collapses whitespace and guarantees a
-    non-empty return (uses 'Unknown' as fallback).
-    """
+        - Elimina caracteres de control y símbolos inválidos en Windows.
+        - Colapsa espacios, recorta puntos/espacios al final y limita la
+            longitud para evitar nombres excesivamente largos.
+        - Si la cadena queda vacía, devuelve 'Unknown'.
+        """
     if not s:
         return "Unknown"
     # normalize whitespace
@@ -113,9 +124,11 @@ def human_readable_size(n):
 
 
 def guess_title_author_from_filename(filename):
-    """Heuristics to extract (title, author) from a messy filename.
+    """
+    Heurística para extraer (título, autor) desde un nombre de fichero.
 
-    Returns (title, author) where any may be None.
+    Devuelve una tupla `(title, author)` donde cualquiera de los dos
+    elementos puede ser `None` si no se detecta con confianza.
     """
     if not filename:
         return None, None

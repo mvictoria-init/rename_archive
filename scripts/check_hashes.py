@@ -1,3 +1,14 @@
+"""
+Escanea una carpeta y agrupa archivos por su hash SHA256 para detectar
+contenidos duplicados.
+
+Uso:
+  python scripts/check_hashes.py <carpeta>
+
+El script imprime grupos de archivos que comparten el mismo SHA256 y
+lista errores de lectura si los hay.
+"""
+
 import hashlib
 import sys
 from pathlib import Path

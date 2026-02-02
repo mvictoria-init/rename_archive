@@ -1,3 +1,26 @@
+"""
+Interfaz gráfica del renombrador.
+
+Este módulo implementa la interfaz Tkinter que permite seleccionar una
+carpeta, escanear archivos de libros, generar propuestas de nombres
+basadas en metadatos y heurísticas, y ejecutar operaciones como
+renombrado, conversión a EPUB y comparación contra una biblioteca
+indexada.
+
+Responsabilidades principales:
+- Construir y aplicar estilos a la ventana y widgets (Treeview, botones,
+    barra de estado).
+- Obtener la lista de archivos desde el sistema de archivos o desde la
+    base de datos SQLite local para renderizarla en la UI.
+- Ofrecer acciones por lotes: renombrar, convertir, eliminar duplicados,
+    refinar propuestas.
+- Integrarse con `scripts/indexer.py` para indexar bibliotecas y comparar
+    por hash de archivo.
+
+Los docstrings y comentarios en este archivo describen cada clase y
+método en español para facilitar la comprensión del flujo de UI.
+"""
+
 import os
 import re
 import shutil
@@ -17,9 +40,102 @@ from .index import db_exists, files_in_folder, DB_PATH
 
 
 class RenamerApp:
+        """
+        Clase principal de la aplicación que construye y gestiona la interfaz.
+
+        `RenamerApp` encapsula el estado y comportamiento de la UI: crea la
+        ventana principal, aplica estilos, y enlaza los eventos de los
+        widgets (botones, doble clic, selección) con los métodos que realizan
+        operaciones de sistema de archivos y consultas a la base de datos.
+
+        Atributos relevantes (resumen):
+        - `root`: la ventana raíz Tk proporcionada por el llamador.
+        - `folder`: `tk.StringVar` con la ruta de la carpeta seleccionada.
+        - `tree`: `ttk.Treeview` principal que muestra archivos y propuestas.
+        - `entries`: lista de tuplas por fila: (ruta_completa, nombre_original,
+            nombre_propuesto, sha256, tamaño, título, autores).
+        - `item_map`: mapea identificadores del Treeview a índices en `entries`.
+        - `scan_btn`, `rename_btn`, etc.: referencias a widgets para habilitar/
+            deshabilitar según el estado.
+
+        Los métodos de la clase implementan escaneo, renombrado, conversión,
+        detección de duplicados e integración con el indexador. Muchos de los
+        procesos que pueden ser lentos se ejecutan en hilos de background y
+        actualizan la UI mediante `root.after` para mantener el mainloop
+        responsivo.
+        """
+        docstrings below for explicit behavioral details and threading notes.
+        """
     def __init__(self, root):
         self.root = root
+        """
+        Initialize the GUI and internal state.
+
+        This method constructs all visible widgets, configures visual
+        styles (colors, button styles, Treeview appearance), and initializes
+        internal data structures used to track items and UI state. This is a
+        potentially expensive method because it sets up the whole window; the
+        actual file scanning is performed later by `scan()` or by indexing.
+
+        Threading notes: some long-running operations started from the UI
+        (e.g. library indexing) are launched on background threads so the
+        Tkinter mainloop stays responsive. Methods that update widgets from
+        those threads use `root.after(0, callback)` to schedule UI updates on
+        the main thread.
+        """
         root.title('Renombrador por Autor y Título')
+        # Apply dark theme colors and ttk styles for a modern, low-light UI
+        bg = '#1e1b22'  # main window background (very dark)
+        # Accent color (mauve/purple) to mirror provided mockup
+        accent = '#7b416f'
+        try:
+            root.configure(bg=bg)
+        except Exception:
+            pass
+        style = ttk.Style()
+        try:
+            style.theme_use('default')
+        except Exception:
+            pass
+        # Base widget backgrounds
+        style.configure('TFrame', background=bg)
+        style.configure('TLabel', background=bg, foreground='#e6dfe6')
+        style.configure('TButton', background=bg, foreground='#e6dfe6')
+        # Treeview: dark rows with light text, subtle heading tint
+        style.configure('Treeview', background='#262126', fieldbackground='#262126', foreground='#e8dfe8')
+        style.configure('Treeview.Heading', background='#3a2b36', foreground='#f4eef6')
+        # Accent frame/label/button styles
+        style.configure('Accent.TFrame', background='#2b1f2b')
+        style.configure('Accent.TLabel', background='#2b1f2b', foreground='#f4eef6')
+        style.configure('Accent.TButton', background=accent, foreground='#ffffff')
+        self._app_bg = bg
+        self._accent = accent
+        # App-wide darker background used for additional style touches
+        self.bg_color = '#232023'
+        try:
+            # Ensure common ttk widget backgrounds align with dark theme
+            try:
+                style.theme_use(style.theme_use())
+            except Exception:
+                pass
+            style.configure('TLabelframe', background=self.bg_color)
+            style.configure('TLabelframe.Label', background=self.bg_color, foreground='#e6dfe6')
+            style.configure('TButton', background=self.bg_color, foreground='#e6dfe6')
+            style.configure('Treeview', background='#262126', fieldbackground='#262126', foreground='#e8dfe8')
+        except Exception:
+            pass
+        try:
+            root.configure(bg=self.bg_color)
+        except Exception:
+            pass
+        # Rounded button styles: neutral and accent variants (dark)
+        try:
+            style.configure('Rounded.TButton', background='#2f2b2f', foreground='#e8dfe8', relief='flat', padding=(8,6), borderwidth=1)
+            style.map('Rounded.TButton', background=[('active', '#3a343a')])
+            style.configure('RoundedAccent.TButton', background=self._accent, foreground='#ffffff', relief='flat', padding=(8,6), borderwidth=1)
+            style.map('RoundedAccent.TButton', background=[('active', '#5d335a')])
+        except Exception:
+            pass
         self.folder = tk.StringVar()
         # hilo de escaneo actual (para evitar overlaps)
         self._scan_thread = None
@@ -30,9 +146,9 @@ class RenamerApp:
         frm = ttk.Frame(root, padding=10)
         frm.pack(fill='both', expand=True)
 
-        top = ttk.Frame(frm)
+        top = ttk.Frame(frm, style='Accent.TFrame')
         top.pack(fill='x')
-        ttk.Button(top, text='Seleccionar carpeta', command=self.select_folder).pack(side='left')
+        ttk.Button(top, text='Seleccionar carpeta', command=self.select_folder, style='RoundedAccent.TButton').pack(side='left')
         ttk.Label(top, textvariable=self.folder).pack(side='left', padx=8)
 
         self.status = tk.StringVar(value='')
@@ -93,33 +209,45 @@ class RenamerApp:
         self._editing_entry = None
         self.tree.bind('<Double-1>', self.on_double_click)
 
-        bottom = ttk.Frame(frm)
+        bottom = ttk.Frame(frm, style='Accent.TFrame')
         bottom.pack(fill='x')
-        self.scan_btn = ttk.Button(bottom, text='Escanear', command=self.scan)
+        self.scan_btn = ttk.Button(bottom, text='Escanear', command=self.scan, style='RoundedAccent.TButton')
         self.scan_btn.pack(side='left')
-        self.rename_btn = ttk.Button(bottom, text='Renombrar', command=self.rename_files)
+        self.rename_btn = ttk.Button(bottom, text='Renombrar', command=self.rename_files, style='RoundedAccent.TButton')
         self.rename_btn.pack(side='left', padx=6)
-        self.rename_selected_btn = ttk.Button(bottom, text='Renombrar seleccionado', command=self.rename_selected)
+        self.rename_selected_btn = ttk.Button(bottom, text='Renombrar seleccionado', command=self.rename_selected, style='RoundedAccent.TButton')
         self.rename_selected_btn.pack(side='left', padx=6)
-        self.delete_dup_btn = ttk.Button(bottom, text='Eliminar duplicados', command=self.delete_duplicates)
+        self.delete_dup_btn = ttk.Button(bottom, text='Eliminar duplicados', command=self.delete_duplicates, style='RoundedAccent.TButton')
         self.delete_dup_btn.pack(side='left', padx=6)
-        self.convert_btn = ttk.Button(bottom, text='Convertir a EPUB', command=self.convert_selected_to_epub)
+        self.convert_btn = ttk.Button(bottom, text='Convertir a EPUB', command=self.convert_selected_to_epub, style='RoundedAccent.TButton')
         self.convert_btn.pack(side='left', padx=6)
-        self.delete_file_btn = ttk.Button(bottom, text='Eliminar archivo', command=self.delete_selected_file)
+        self.delete_file_btn = ttk.Button(bottom, text='Eliminar archivo', command=self.delete_selected_file, style='RoundedAccent.TButton')
         self.delete_file_btn.pack(side='left', padx=6)
-        self.refine_btn = ttk.Button(bottom, text='Refinar propuesta', command=self.refine_selected_proposals)
+        self.refine_btn = ttk.Button(bottom, text='Refinar propuesta', command=self.refine_selected_proposals, style='RoundedAccent.TButton')
         self.refine_btn.pack(side='left', padx=6)
-        self.model_btn = ttk.Button(bottom, text='Sugerir (modelo)', command=self.suggest_with_model)
+        self.model_btn = ttk.Button(bottom, text='Sugerir (modelo)', command=self.suggest_with_model, style='RoundedAccent.TButton')
         self.model_btn.pack(side='left', padx=6)
-        self.check_lib_dups_btn = ttk.Button(bottom, text='VS Biblioteca', command=self.check_library_duplicates)
+        self.check_lib_dups_btn = ttk.Button(bottom, text='VS Biblioteca', command=self.check_library_duplicates, style='RoundedAccent.TButton')
         self.check_lib_dups_btn.pack(side='left', padx=6)
         
         # New button
-        self.set_lib_btn = ttk.Button(bottom, text='Sel. Biblioteca', command=self.select_library_folder)
+        self.set_lib_btn = ttk.Button(bottom, text='Sel. Biblioteca', command=self.select_library_folder, style='RoundedAccent.TButton')
         self.set_lib_btn.pack(side='left', padx=6)
 
     def select_library_folder(self):
-        d = filedialog.askdirectory(title='Seleccionar carpeta de Biblioteca')
+                                """Solicita al usuario seleccionar una carpeta que se tratará como la
+                                biblioteca de referencia y, opcionalmente, la indexa usando el
+                                script externo `scripts/indexer.py`.
+
+                                Comportamiento:
+                                - Abre un selector de directorio; si el usuario cancela, retorna.
+                                - Pregunta si se debe ejecutar el indexador (puede tardar varios minutos).
+                                - Deshabilita los botones relacionados con la biblioteca mientras
+                                    se realiza el indexado y lanza un hilo en segundo plano para ello.
+                                - Al completar o fallar, programa las actualizaciones de UI via
+                                    `root.after` para reactivar botones y mostrar mensajes.
+                                """
+                d = filedialog.askdirectory(title='Seleccionar carpeta de Biblioteca')
         if not d:
             return
         
@@ -169,7 +297,28 @@ class RenamerApp:
         t.start()
 
     def check_library_duplicates(self):
-        from .index import find_files_by_hash
+                                """Compara los archivos locales mostrados con la biblioteca indexada
+                                (por SHA256) y presenta un diálogo para resolver duplicados.
+
+                                Pasos realizados:
+                                - Construye un mapa de hashes locales a partir de `self.entries` (solo
+                                    se consideran entradas con SHA calculado).
+                                - Consulta `renamer.index.find_files_by_hash` para obtener filas de la
+                                    base de datos que coinciden con cada hash.
+                                - Para cada hash con coincidencias remotas (excluyendo rutas idénticas),
+                                    añade un panel al diálogo mostrando la ruta local y las rutas de la
+                                    biblioteca que coinciden.
+                                - Presenta opciones (radio) para: mantener ambos, mantener local (y
+                                    eliminar remoto) o mantener biblioteca (y eliminar local). La
+                                    selección por defecto es mantener la copia de la biblioteca.
+                                - Al aplicar, realiza las eliminaciones solicitadas y muestra un
+                                    resumen; luego refresca la vista local llamando a `self.scan()`.
+
+                                Nota: las consultas ligeras a la BD y la construcción de la UI se
+                                realizan en el hilo principal; las eliminaciones de archivos se
+                                efectúan de manera síncrona pero se esperan rápidas.
+                                """
+                from .index import find_files_by_hash
         # Collect current hashes
         local_hashes = {}
         for entry in self.entries:
@@ -216,7 +365,7 @@ class RenamerApp:
         container = ttk.Frame(dlg)
         container.pack(fill='both', expand=True)
         
-        canvas = tk.Canvas(container)
+        canvas = tk.Canvas(container, bg=self._app_bg, highlightthickness=0)
         scrollbar = ttk.Scrollbar(container, orient='vertical', command=canvas.yview)
         scroll_frame = ttk.Frame(canvas)
         
@@ -311,11 +460,27 @@ class RenamerApp:
             else:
                 messagebox.showinfo('Resultado', 'No se realizaron cambios.')
 
-        ttk.Button(btn_frame, text='Cancelar', command=dlg.destroy).pack(side='right', padx=10)
-        ttk.Button(btn_frame, text='Aplicar acciones', command=apply).pack(side='right', padx=10)
+        ttk.Button(btn_frame, text='Cancelar', command=dlg.destroy, style='Rounded.TButton').pack(side='right', padx=10)
+        ttk.Button(btn_frame, text='Aplicar acciones', command=apply, style='Rounded.TButton').pack(side='right', padx=10)
 
     def suggest_with_model(self, auto: bool = False, max_dist: float = 0.6):
-        sels = self.tree.selection()
+                                """Ejecuta el modelo de sugerencias sobre las filas seleccionadas
+                                (o todas si `auto` es True) para calcular nombres propuestos.
+
+                                Parámetros:
+                                - `auto`: si es True, procesa todas las entradas (útil tras el
+                                    escaneo si `auto_suggest_on_scan` está activado). Si es False,
+                                    opera solo sobre las filas actualmente seleccionadas en el Treeview.
+                                - `max_dist`: umbral que el modelo usa para decidir si una sugerencia
+                                    está lo bastante cerca para considerarla.
+
+                                Notas de implementación:
+                                - El cálculo de sugerencias puede realizarse de forma síncrona; si
+                                    hay muchas entradas, las llamadas de nivel superior deben ejecutar
+                                    este método en hilos para no bloquear la UI. La llamada real al
+                                    modelo es `renamer.infer.suggest_for_file`.
+                                """
+                sels = self.tree.selection()
         target_idxs = []
         if sels:
             for iid in sels:
@@ -381,6 +546,14 @@ class RenamerApp:
 
     def _maybe_auto_model(self):
         # evita disparar si ya hay un hilo en marcha o si el botón está deshabilitado
+        """
+        Ejecuta automáticamente el modelo tras un escaneo si está habilitado.
+
+        Comprueba la bandera `auto_suggest_on_scan` y que el botón del
+        modelo no esté deshabilitado. Si procede, programa una llamada a
+        `suggest_with_model(auto=True)` en el siguiente ciclo del bucle
+        principal para no bloquear el evento actual.
+        """
         if not getattr(self, 'auto_suggest_on_scan', False):
             return
         try:
@@ -393,11 +566,34 @@ class RenamerApp:
         self.root.after(10, lambda: self.suggest_with_model(auto=True))
 
     def select_folder(self):
+        """
+        Abrir un selector de carpeta y almacenar la ruta seleccionada.
+
+        Si el usuario elige una carpeta, su ruta se guarda en `self.folder`.
+        El escaneo real de archivos se realiza con `self.scan()` para que
+        la selección y el listado queden desacoplados.
+        """
         d = filedialog.askdirectory()
         if d:
             self.folder.set(d)
 
-    def scan(self):
+     def scan(self):
+          """
+          Poblar la interfaz con los archivos de la carpeta seleccionada.
+
+          Modos principales:
+          1) Ruta rápida: si existe la base de datos de índice y contiene
+              entradas para la carpeta, cargar desde `files_in_folder` es
+              mucho más rápido porque evita recalcular hashes y extraer
+              metadatos.
+          2) Recorrido del sistema de archivos: si no hay índice, se
+              examinan los archivos, se calcula SHA256 y se extraen
+              metadatos/ propuestas si es necesario.
+
+          La función actualiza `self.entries`, llena el `Treeview`, marca
+          duplicados (mismo SHA) y lanza un worker incremental en background
+          para detectar nuevos o cambiados y actualizar la DB/UI.
+          """
         folder = self.folder.get()
         if not folder:
             messagebox.showwarning('Carpeta', 'Seleccione una carpeta primero')
@@ -663,6 +859,13 @@ class RenamerApp:
         self.scan()
 
     def convert_selected_to_epub(self):
+        """Convierte los archivos seleccionados a formato EPUB.
+
+        Recolecta las filas seleccionadas del Treeview y lanza un hilo en segundo
+        plano que llama a `convert_to_epub` para cada archivo. La interfaz muestra
+        'Convirtiendo...' mientras procesa y, al finalizar, muestra los resultados
+        (éxitos o errores) mediante `messagebox`.
+        """
         sels = self.tree.selection()
         if not sels:
             messagebox.showinfo('Convertir', 'Seleccione uno o más archivos para convertir')
@@ -717,6 +920,14 @@ class RenamerApp:
         t.start()
 
     def delete_selected_file(self):
+        """
+        Delete the selected file(s) from disk after confirmation.
+
+        This prompts the user to select rows and then attempts to remove
+        the corresponding filesystem entries. Any failures are collected
+        and shown to the user. After deletion the Treeview and internal
+        `entries` list are updated to reflect the removals.
+        """
         sels = self.tree.selection()
         if not sels:
             messagebox.showinfo('Eliminar', 'Seleccione uno o más archivos para eliminar')
@@ -757,6 +968,15 @@ class RenamerApp:
             messagebox.showinfo('Listo', f'Eliminados {len(removed_paths)} archivos')
 
     def refine_selected_proposals(self):
+        """
+        Recompute and improve filename proposals for selected entries.
+
+        For each selected row (or for all entries if none selected), this
+        method attempts to extract title/author information from existing
+        metadata or by guessing from the filename. It then formats a new
+        proposed filename using the project's author/title template and
+        updates `self.entries` and the visible Treeview values.
+        """
         from .utils import guess_title_author_from_filename
         sels = self.tree.selection()
         target_idxs = []
@@ -813,9 +1033,23 @@ class RenamerApp:
         messagebox.showinfo('Refinar', f'Actualizadas {changed} propuestas')
 
     def on_select(self):
+        """Manejador de selección (placeholder).
+
+        Actualmente no realiza ninguna acción. Está vinculado al evento de
+        selección del Treeview y se deja como punto de extensión para actualizar
+        la UI basada en la selección (activar/desactivar botones, mostrar una
+        vista previa, etc.).
+        """
         return
 
     def on_double_click(self, event):
+        """Manejador de edición en sitio para el Treeview.
+
+        Al hacer doble clic en una celda de la columna 1 (nombre mostrado) o
+        columna 2 (nombre propuesto), coloca un widget Entry sobre la celda
+        para que el usuario edite. Al presionar Enter o perder el foco, el valor
+        editado se escribe de vuelta en `self.entries` y en la fila del Treeview.
+        """
         region = self.tree.identify('region', event.x, event.y)
         if region != 'cell':
             return
@@ -862,6 +1096,14 @@ class RenamerApp:
         edit.bind('<FocusOut>', finish)
 
     def rename_selected(self):
+        """
+        Rename only the currently selected rows.
+
+        This performs the same file-moving logic as `rename_files` but only
+        for the selected Treeview items. Naming collisions are resolved by
+        appending ` (n)` to the base name. After moving files, the UI is
+        refreshed via `self.scan()`.
+        """
         sels = self.tree.selection()
         if not sels:
             messagebox.showinfo('Seleccionar', 'Seleccione una o más filas para renombrar')
@@ -898,6 +1140,14 @@ class RenamerApp:
         self.scan()
 
     def delete_duplicates(self):
+        """Presenta un diálogo para eliminar en bloque archivos duplicados
+        encontrados en `self.entries`.
+
+        Agrupa las entradas por SHA256 (`fh`), identifica los grupos con más
+        de un miembro y los muestra en un diálogo desplazable donde el usuario
+        puede elegir qué archivo(s) eliminar. No realiza borrados automáticos
+        sin confirmación explícita del usuario.
+        """
         groups = {}
         for orig, disp, new, fh, sz, title, author in self.entries:
             if not fh:
@@ -1012,5 +1262,5 @@ class RenamerApp:
                 messagebox.showinfo('Listo', f'Eliminados {deleted} archivos duplicados.')
                 self.scan()
 
-        ttk.Button(btns, text='Cancelar', command=on_cancel).pack(side='right', padx=6)
-        ttk.Button(btns, text='Eliminar seleccionados', command=on_apply).pack(side='right')
+        ttk.Button(btns, text='Cancelar', command=on_cancel, style='Rounded.TButton').pack(side='right', padx=6)
+        ttk.Button(btns, text='Eliminar seleccionados', command=on_apply, style='Rounded.TButton').pack(side='right')
