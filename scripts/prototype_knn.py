@@ -1,17 +1,15 @@
 """
-Prototipo: sugeridor TF-IDF + kNN para propuestas "Autor - Título".
+Prototype: TF-IDF + kNN suggester for `Author - Title` proposals.
 
-Uso:
-    python scripts\prototype_knn.py --dataset data/dataset.jsonl --build
-    python scripts\prototype_knn.py --dataset data/dataset.jsonl --query "texto de ejemplo" --top 5
-    python scripts\prototype_knn.py --dataset data/dataset.jsonl --interactive
+Usage:
+  python scripts\prototype_knn.py --dataset data/dataset.jsonl --build
+  python scripts\prototype_knn.py --dataset data/dataset.jsonl --query "some sample text" --top 5
+  python scripts\prototype_knn.py --dataset data/dataset.jsonl --interactive
 
-Requisitos:
-    Instalar `scikit-learn` si se quiere construir o consultar modelos.
+Requirements:
+  pip install scikit-learn
 
-Este script entrena un `TfidfVectorizer` y un `NearestNeighbors` y
-guarda los artefactos en `data/models/` cuando se ejecuta con
-`--build`.
+The script will save models to `data/models/` (vectorizer.pkl, knn.pkl) when run with `--build`.
 """
 from __future__ import annotations
 import argparse

@@ -1,17 +1,4 @@
-"""
-Módulo de sugerencias: heurísticas y asistente basado en KNN/Tf-idf.
-
-Proporciona una función de alto nivel `suggest_for_file` que intenta
-generar un nombre propuesto del tipo "Autor - Título" para un archivo
-de libro. El flujo de decisión es:
-1. Extraer metadatos embebidos (si están disponibles).
-2. Aplicar heurísticas sobre el nombre de fichero.
-3. (Opcional) Consultar modelos TF-IDF + kNN entrenados para recuperar
-    propuestas similares desde un dataset previo.
-
-El resto del archivo inicializa y carga los modelos serializados desde
-`data/models/` si están presentes.
-"""
+"""Sugerencias de nombre basadas en metadatos, heurísticas y un modelo KNN."""
 
 import os
 import re
@@ -41,6 +28,7 @@ _knn = None
 _proposals = None
 
 def load_models():
+    """Carga vectorizador y KNN entrenados si existen; retorna True si quedan listos."""
     global _models_loaded, _vec, _knn, _proposals
     if _models_loaded:
         return True
@@ -62,19 +50,10 @@ def load_models():
         return False
 
 def suggest_for_file(filepath: str | Path):
-        """
-        Devuelve una tupla (propuesta_nombre, title, author) para `filepath`.
-
-        Estrategia:
-        - Intenta usar metadatos internos (PDF/DOCX/EPUB/TXT).
-        - Si faltan metadatos, aplica heurísticas sobre el nombre de archivo.
-        - Si los modelos ML están disponibles y la similitud es alta, usa la
-            propuesta recuperada por el KNN.
-
-        Retorna: `(proposed_filename, title_or_None, author_or_None)`.
-        Si no hay sugerencia, devuelve el nombre actual y `None` para los
-        campos de título/autor.
-        """
+    """
+    Returns a suggested (filename, title, author) tuple for a given file.
+    If no good suggestion found, returns (current_filename, None, None).
+    """
     path = Path(filepath)
     ext = path.suffix
     

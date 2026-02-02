@@ -1,24 +1,13 @@
-"""
-Funciones utilitarias para normalizar nombres, autores y realizar
-heurísticas simples sobre nombres de fichero.
-
-Las funciones que se exportan aquí son usadas por el resto de la
-aplicación para producir nombres de fichero seguros, formatear autores
-para inclusión en el nombre y adivinar título/autor desde cadenas sucias.
-"""
-
 import re
 import os
 
 def sanitize(s: str) -> str:
-        """
-        Normaliza una cadena para uso como nombre de fichero.
+    """Return a filesystem-safe, human-friendly string.
 
-        - Elimina caracteres de control y símbolos inválidos en Windows.
-        - Colapsa espacios, recorta puntos/espacios al final y limita la
-            longitud para evitar nombres excesivamente largos.
-        - Si la cadena queda vacía, devuelve 'Unknown'.
-        """
+    This removes control characters, reserved Windows filename characters,
+    trims trailing spaces/dots, collapses whitespace and guarantees a
+    non-empty return (uses 'Unknown' as fallback).
+    """
     if not s:
         return "Unknown"
     # normalize whitespace
@@ -43,6 +32,7 @@ def sanitize(s: str) -> str:
 
 
 def normalize_authors(author_field):
+    """Normaliza campo de autores a cadena unificada "Nombre Apellido, Nombre2 Apellido2"."""
     if not author_field:
         return None
     items = []
@@ -95,6 +85,7 @@ def normalize_authors(author_field):
 
 
 def format_authors_for_filename(auth_norm, max_authors=3):
+    """Formatea autores para incluir en nombre de archivo, con límite de max_authors."""
     if not auth_norm:
         return ''
     if isinstance(auth_norm, str):
@@ -112,6 +103,7 @@ def format_authors_for_filename(auth_norm, max_authors=3):
 
 
 def human_readable_size(n):
+    """Convierte tamaño en bytes a formato legible (KB, MB, GB...)."""
     try:
         n = int(n)
     except Exception:
@@ -124,11 +116,9 @@ def human_readable_size(n):
 
 
 def guess_title_author_from_filename(filename):
-    """
-    Heurística para extraer (título, autor) desde un nombre de fichero.
+    """Heuristics to extract (title, author) from a messy filename.
 
-    Devuelve una tupla `(title, author)` donde cualquiera de los dos
-    elementos puede ser `None` si no se detecta con confianza.
+    Returns (title, author) where any may be None.
     """
     if not filename:
         return None, None

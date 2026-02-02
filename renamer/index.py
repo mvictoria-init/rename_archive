@@ -1,15 +1,8 @@
-"""
-Utilidades para leer la base de datos de índice creada por
-`scripts/indexer.py`.
+"""Helpers to read the index DB created by `scripts/indexer.py`.
 
-Funciones exportadas (resumen):
-- `db_exists()`: comprueba si `data/index.db` existe.
-- `files_in_folder(folder)`: itera sobre filas de la tabla `files`
-    cuyo path comienza con `folder`.
-- `find_files_by_hash(sha256)`: devuelve filas que comparten un hash SHA256.
-
-Cada fila devuelta por `files_in_folder` o `find_files_by_hash` es un
-diccionario con las claves: `path`, `size`, `sha256`, `title`, `authors`.
+Functions:
+- db_path(): path to data/index.db
+- files_in_folder(folder): yield dicts for files whose absolute path starts with `folder`
 """
 from __future__ import annotations
 from pathlib import Path

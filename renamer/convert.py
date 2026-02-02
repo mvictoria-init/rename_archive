@@ -21,17 +21,20 @@ try:
     _HAS_FITZ = True
 except Exception:
     _HAS_FITZ = False
+
 try:
     from PIL import Image
     import io
     _HAS_PIL = True
 except Exception:
     _HAS_PIL = False
+
 try:
     import docx
     _HAS_DOCX = True
 except Exception:
     _HAS_DOCX = False
+    
 try:
     from bs4 import BeautifulSoup
     _HAS_BS4 = True

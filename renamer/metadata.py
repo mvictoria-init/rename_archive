@@ -1,12 +1,3 @@
-"""
-Extractores de metadatos para distintos formatos de libro.
-
-Este módulo contiene funciones específicas para PDF, DOCX, EPUB y TXT
-que intentan leer título y autor usando bibliotecas disponibles (PyMuPDF,
-PyPDF2, python-docx, ebooklib) con fallbacks tolerantes y heurísticas de
-decodificación cuando los metadatos son incompletos o inconsistentes.
-"""
-
 import re
 import zipfile
 from pathlib import Path
