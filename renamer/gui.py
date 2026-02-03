@@ -35,9 +35,9 @@ class RenamerApp:
         self.root = root
         root.title('Renombrador por Autor y Título')
         # Apply dark theme colors and ttk styles for a modern, low-light UI
-        bg = '#1e1b22'  # main window background (very dark)
-        # Accent color (mauve/purple) to mirror provided mockup
-        accent = '#7b416f'
+        bg = '#18151c'  # main window background (very dark)
+        # Accent color (brighter violeta for better legibility)
+        accent = '#a46bff'
         try:
             root.configure(bg=bg)
         except Exception:
@@ -49,19 +49,19 @@ class RenamerApp:
             pass
         # Base widget backgrounds
         style.configure('TFrame', background=bg)
-        style.configure('TLabel', background=bg, foreground='#e6dfe6')
-        style.configure('TButton', background=bg, foreground='#e6dfe6')
-        # Treeview: dark rows with light text, subtle heading tint
-        style.configure('Treeview', background='#262126', fieldbackground='#262126', foreground='#e8dfe8')
-        style.configure('Treeview.Heading', background='#3a2b36', foreground='#f4eef6')
+        style.configure('TLabel', background=bg, foreground='#f0ecf7')
+        style.configure('TButton', background=bg, foreground='#f0ecf7')
+        # Treeview: dark rows with lighter text, higher-contrast heading
+        style.configure('Treeview', background='#211c24', fieldbackground='#211c24', foreground='#f3ecff')
+        style.configure('Treeview.Heading', background='#3f334a', foreground='#ffffff')
         # Accent frame/label/button styles
-        style.configure('Accent.TFrame', background='#2b1f2b')
-        style.configure('Accent.TLabel', background='#2b1f2b', foreground='#f4eef6')
-        style.configure('Accent.TButton', background=accent, foreground='#ffffff')
+        style.configure('Accent.TFrame', background='#2a2132')
+        style.configure('Accent.TLabel', background='#2a2132', foreground='#f8f2ff')
+        style.configure('Accent.TButton', background=accent, foreground='#0c0812')
         self._app_bg = bg
         self._accent = accent
         # App-wide darker background used for additional style touches
-        self.bg_color = '#232023'
+        self.bg_color = '#1f1b22'
         try:
             # Ensure common ttk widget backgrounds align with dark theme
             try:
@@ -69,9 +69,9 @@ class RenamerApp:
             except Exception:
                 pass
             style.configure('TLabelframe', background=self.bg_color)
-            style.configure('TLabelframe.Label', background=self.bg_color, foreground='#e6dfe6')
-            style.configure('TButton', background=self.bg_color, foreground='#e6dfe6')
-            style.configure('Treeview', background='#262126', fieldbackground='#262126', foreground='#e8dfe8')
+            style.configure('TLabelframe.Label', background=self.bg_color, foreground='#f0ecf7')
+            style.configure('TButton', background=self.bg_color, foreground='#f0ecf7')
+            style.configure('Treeview', background='#211c24', fieldbackground='#211c24', foreground='#f3ecff')
         except Exception:
             pass
         try:
@@ -80,10 +80,10 @@ class RenamerApp:
             pass
         # Rounded button styles: neutral and accent variants (dark)
         try:
-            style.configure('Rounded.TButton', background='#2f2b2f', foreground='#e8dfe8', relief='flat', padding=(8,6), borderwidth=1)
-            style.map('Rounded.TButton', background=[('active', '#3a343a')])
-            style.configure('RoundedAccent.TButton', background=self._accent, foreground='#ffffff', relief='flat', padding=(8,6), borderwidth=1)
-            style.map('RoundedAccent.TButton', background=[('active', '#5d335a')])
+            style.configure('Rounded.TButton', background='#2b2630', foreground='#f3ecff', relief='flat', padding=(8,6), borderwidth=1)
+            style.map('Rounded.TButton', background=[('active', '#3a3242')])
+            style.configure('RoundedAccent.TButton', background=self._accent, foreground='#120a1c', relief='flat', padding=(8,6), borderwidth=1)
+            style.map('RoundedAccent.TButton', background=[('active', '#8b57e0')])
         except Exception:
             pass
         self.folder = tk.StringVar()
