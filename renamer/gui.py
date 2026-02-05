@@ -108,10 +108,10 @@ class RenamerApp:
         except Exception:
             pass
         self.folder = tk.StringVar()
-        # hilo de escaneo actual (para evitar overlaps)
+        # current scan thread (to avoid overlapping scans)
         self._scan_thread = None
-        # activar sugerencias automáticas del modelo al terminar un escaneo
-        # la dejamos desactivada por defecto para evitar propuestas masivas indeseadas
+        # enable automatic model suggestions after a scan
+        # disabled by default to avoid mass unsolicited proposals
         self.auto_suggest_on_scan = False
 
         frm = ttk.Frame(root, padding=10)
@@ -577,7 +577,7 @@ class RenamerApp:
                     except Exception:
                         pass
 
-                    # sugerir con modelo automáticamente si está habilitado
+                    # suggest with the model automatically if enabled
                     self._maybe_auto_model()
 
                     # start incremental background worker to detect new/changed files
@@ -729,7 +729,7 @@ class RenamerApp:
                     self.tree.tag_configure('dup', background='#ffdce0')
                 except Exception:
                     pass
-                # sugerir con modelo automáticamente si está habilitado
+                # suggest with the model automatically if enabled
                 self._maybe_auto_model()
 
             self.root.after(0, on_done)

@@ -32,7 +32,11 @@ def sanitize(s: str) -> str:
 
 
 def normalize_authors(author_field):
-    """Normaliza campo de autores a cadena unificada "Nombre Apellido, Nombre2 Apellido2"."""
+    """Normalize an author field into a unified string "First Last, First2 Last2".
+
+    Handles lists, comma-separated "Last, First" forms, and common separators.
+    Returns a comma-separated string or None.
+    """
     if not author_field:
         return None
     items = []
@@ -85,7 +89,10 @@ def normalize_authors(author_field):
 
 
 def format_authors_for_filename(auth_norm, max_authors=3):
-    """Formatea autores para incluir en nombre de archivo, con límite de max_authors."""
+    """Format normalized authors for filenames, limiting to `max_authors`.
+
+    Returns an empty string when no authors are available.
+    """
     if not auth_norm:
         return ''
     if isinstance(auth_norm, str):
@@ -103,7 +110,7 @@ def format_authors_for_filename(auth_norm, max_authors=3):
 
 
 def human_readable_size(n):
-    """Convierte tamaño en bytes a formato legible (KB, MB, GB...)."""
+    """Convert a size in bytes to a human-readable string (KB, MB, GB...)."""
     try:
         n = int(n)
     except Exception:

@@ -1,4 +1,4 @@
-"""Sugerencias de nombre basadas en metadatos, heurísticas y un modelo KNN."""
+"""Name suggestions based on metadata, heuristics and a KNN model."""
 
 import os
 import re
@@ -28,7 +28,7 @@ _knn = None
 _proposals = None
 
 def load_models():
-    """Carga vectorizador y KNN entrenados si existen; retorna True si quedan listos."""
+    """Load trained vectorizer and KNN if present; return True when ready."""
     global _models_loaded, _vec, _knn, _proposals
     if _models_loaded:
         return True

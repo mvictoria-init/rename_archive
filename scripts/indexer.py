@@ -1,9 +1,10 @@
-"""
-Indexador rápido para la colección de libros.
-- Uso: python scripts/indexer.py <folder> [--rebuild]
-- Crea/usa `data/index.db` con tablas `files` y `texts`.
-- Es incremental: si un archivo ya está en la BD con el mismo mtime y tamaño, se salta.
-- Extrae metadata mínima usando `renamer.metadata.extract_metadata` y textos con los extractores de `renamer.convert`.
+"""Quick indexer for a book collection.
+
+Usage: python scripts/indexer.py <folder> [--rebuild]
+
+Creates/uses `data/index.db` with tables `files` and `texts`.
+This is incremental: files already present in the DB with the same mtime and size are skipped.
+Extracts minimal metadata using `renamer.metadata.extract_metadata` and text with the extractors in `renamer.convert`.
 """
 from __future__ import annotations
 import sys
