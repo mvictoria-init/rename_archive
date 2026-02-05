@@ -506,6 +506,30 @@ class RenamerApp:
                 sha_map = {}
                 rows = list(files_in_folder(folder_path))
                 if rows:
+                    # Filter out DB entries whose files no longer exist on disk.
+                    missing = []
+                    filtered_rows = []
+                    for r in rows:
+                        p = Path(r['path'])
+                        if not p.exists():
+                            missing.append(r['path'])
+                            continue
+                        filtered_rows.append(r)
+                    # If any missing entries, remove them from the DB to avoid stale results
+                    if missing:
+                        try:
+                            conn = sqlite3.connect(str(DB_PATH))
+                            cur = conn.cursor()
+                            for mp in missing:
+                                try:
+                                    cur.execute('DELETE FROM files WHERE path=?', (mp,))
+                                except Exception:
+                                    pass
+                            conn.commit()
+                            conn.close()
+                        except Exception:
+                            pass
+                    rows = filtered_rows
                     for r in rows:
                         p = Path(r['path'])
                         title = r.get('title')
