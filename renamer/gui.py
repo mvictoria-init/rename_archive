@@ -38,6 +38,13 @@ class RenamerApp:
         bg = '#18151c'  # main window background (very dark)
         # Accent color (brighter violeta for better legibility)
         accent = '#a46bff'
+        # Dialog-specific palette for contrasty cards
+        dialog_bg = '#0f0c12'
+        dialog_card_bg = '#1d1821'
+        dialog_text = '#f4f0ff'
+        dialog_muted = '#cfc7dd'
+        dialog_local = '#9ad5ff'
+        dialog_remote = '#f7b87b'
         try:
             root.configure(bg=bg)
         except Exception:
@@ -60,6 +67,13 @@ class RenamerApp:
         style.configure('Accent.TButton', background=accent, foreground='#0c0812')
         self._app_bg = bg
         self._accent = accent
+        # Dialog colors stored for reuse
+        self._dialog_bg = dialog_bg
+        self._dialog_card_bg = dialog_card_bg
+        self._dialog_text = dialog_text
+        self._dialog_muted = dialog_muted
+        self._dialog_local = dialog_local
+        self._dialog_remote = dialog_remote
         # App-wide darker background used for additional style touches
         self.bg_color = '#1f1b22'
         try:
@@ -84,6 +98,13 @@ class RenamerApp:
             style.map('Rounded.TButton', background=[('active', '#3a3242')])
             style.configure('RoundedAccent.TButton', background=self._accent, foreground='#120a1c', relief='flat', padding=(8,6), borderwidth=1)
             style.map('RoundedAccent.TButton', background=[('active', '#8b57e0')])
+            # Dialog specific styles
+            style.configure('Dialog.TFrame', background=self._dialog_bg)
+            style.configure('Dialog.TLabelframe', background=self._dialog_card_bg, borderwidth=1, relief='solid')
+            style.configure('Dialog.TLabelframe.Label', background=self._dialog_card_bg, foreground=self._dialog_text)
+            style.configure('Dialog.TLabel', background=self._dialog_card_bg, foreground=self._dialog_text)
+            style.configure('Dialog.TRadiobutton', background=self._dialog_card_bg, foreground=self._dialog_text)
+            style.map('Dialog.TRadiobutton', background=[('active', '#2a2230')], foreground=[('active', '#ffffff')])
         except Exception:
             pass
         self.folder = tk.StringVar()
@@ -278,12 +299,12 @@ class RenamerApp:
         dlg.title(f'Conflicto con Biblioteca - {len(duplicates_found)} archivos')
         dlg.geometry('900x600')
 
-        container = ttk.Frame(dlg)
+        container = ttk.Frame(dlg, style='Dialog.TFrame')
         container.pack(fill='both', expand=True)
         
-        canvas = tk.Canvas(container, bg=self._app_bg, highlightthickness=0)
+        canvas = tk.Canvas(container, bg=self._dialog_bg, highlightthickness=0)
         scrollbar = ttk.Scrollbar(container, orient='vertical', command=canvas.yview)
-        scroll_frame = ttk.Frame(canvas)
+        scroll_frame = ttk.Frame(canvas, style='Dialog.TFrame')
         
         scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
@@ -303,21 +324,21 @@ class RenamerApp:
         actions = {} # local_path -> StringVar(value='keep_local'/'keep_remote'/'keep_both')
         
         for idx, (local_p, remotes) in enumerate(duplicates_found):
-            lf = ttk.LabelFrame(scroll_frame, text=f'Conflicto {idx+1}: {os.path.basename(local_p)}')
+            lf = ttk.LabelFrame(scroll_frame, text=f'Conflicto {idx+1}: {os.path.basename(local_p)}', style='Dialog.TLabelframe')
             lf.pack(fill='x', padx=10, pady=5, anchor='n')
             
             # Show info
-            info_frame = ttk.Frame(lf)
+            info_frame = ttk.Frame(lf, style='Dialog.TFrame')
             info_frame.pack(fill='x', padx=5, pady=2)
             
             # Local info
-            l_lbl = ttk.Label(info_frame, text=f"LOCAL (Aquí): {local_p}", foreground='blue')
+            l_lbl = ttk.Label(info_frame, text=f"LOCAL (Aquí): {local_p}", style='Dialog.TLabel', foreground=self._dialog_local)
             l_lbl.pack(anchor='w')
             
             # Remote info (could be multiple, just show first few)
             for r in remotes:
                 r_path = r['path']
-                r_lbl = ttk.Label(info_frame, text=f"BIBLIOTECA: {r_path}", foreground='red')
+                r_lbl = ttk.Label(info_frame, text=f"BIBLIOTECA: {r_path}", style='Dialog.TLabel', foreground=self._dialog_remote)
                 r_lbl.pack(anchor='w')
 
             # Actions
@@ -325,14 +346,14 @@ class RenamerApp:
             act_var = tk.StringVar(value='keep_remote')
             actions[local_p] = (act_var, remotes)
             
-            act_frame = ttk.Frame(lf)
+            act_frame = ttk.Frame(lf, style='Dialog.TFrame')
             act_frame.pack(fill='x', padx=5, pady=2)
             
-            ttk.Radiobutton(act_frame, text='Conservar ambos (No hacer nada)', variable=act_var, value='keep_both').pack(side='left', padx=5)
-            ttk.Radiobutton(act_frame, text='Conservar LOCAL (Borrar de biblioteca)', variable=act_var, value='keep_local').pack(side='left', padx=5)
-            ttk.Radiobutton(act_frame, text='Conservar BIBLIOTECA (Borrar local)', variable=act_var, value='keep_remote').pack(side='left', padx=5)
+            ttk.Radiobutton(act_frame, text='Conservar ambos (No hacer nada)', variable=act_var, value='keep_both', style='Dialog.TRadiobutton').pack(side='left', padx=5)
+            ttk.Radiobutton(act_frame, text='Conservar LOCAL (Borrar de biblioteca)', variable=act_var, value='keep_local', style='Dialog.TRadiobutton').pack(side='left', padx=5)
+            ttk.Radiobutton(act_frame, text='Conservar BIBLIOTECA (Borrar local)', variable=act_var, value='keep_remote', style='Dialog.TRadiobutton').pack(side='left', padx=5)
 
-        btn_frame = ttk.Frame(dlg)
+        btn_frame = ttk.Frame(dlg, style='Dialog.TFrame')
         btn_frame.pack(fill='x', pady=10)
         
         def apply():
