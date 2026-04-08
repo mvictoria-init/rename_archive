@@ -34,14 +34,14 @@ class RenamerApp:
         root.title('Renombrador por Autor y Título')
         # Apply dark theme colors and ttk styles for a modern, low-light UI
         
-        bg = '#1a1a1a'          # Gris carbón neutro (descansa el nervio óptico)
-        accent = '#90a4ae'      # Azul acero tenue (profesional y limpio)
-        text_main = '#d6d6d6'   # Gris seda (legible sin deslumbrar)
-        header_bg = '#262626'   # Un tono un poco más claro para separar
-        selection = '#333333'   # Resaltado muy sutil
+        bg = '#10141d'
+        accent = '#38bdf8'
+        text_main = '#e2e8f0'
+        header_bg = '#1a1f2c'
+        selection = '#2d3748'
 
-        tabla_bg = '#2b2b2b'
-        tabla_texto = '#a0a0a0'
+        tabla_bg = '#1a1f2c'
+        tabla_texto = text_main
 
         # Dialog-specific palette for contrasty cards
         dialog_bg = '#0f0c12'
@@ -61,20 +61,35 @@ class RenamerApp:
             pass
         # Base widget backgrounds
         style.configure('TFrame', background=bg)
-        style.configure('TLabel', background=bg, foreground='#f0ecf7', font=('Times New Roman', 13))
-        style.configure('TButton', background=bg, foreground='#f0ecf7')
+        style.configure('TLabel', background=bg, foreground=text_main, font=('Segoe UI', 11))
+        style.configure('TButton', background=bg, foreground=text_main, font=('Segoe UI', 10))
 
-        # Treeview: dark rows with lighter text, higher-contrast heading
+        # Minimalist scrollbar
+        style.configure('Vertical.TScrollbar',
+                        background=header_bg, troughcolor=bg,
+                        bordercolor=bg, arrowcolor=text_main,
+                        relief='flat', borderwidth=0, width=12)
+        style.configure('Horizontal.TScrollbar',
+                        background=header_bg, troughcolor=bg,
+                        bordercolor=bg, arrowcolor=text_main,
+                        relief='flat', borderwidth=0, arrowsize=12)
 
+        # Treeview: borderless with large rowheight for air/spacing
         style.configure('Treeview', 
                         background=tabla_bg, 
                         fieldbackground=tabla_bg, 
                         foreground=tabla_texto,
-                        font=('Times New Roman', 13), rowheight=24)
+                        font=('Segoe UI', 11),
+                        rowheight=35,
+                        borderwidth=0,
+                        relief='flat')
         style.configure('Treeview.Heading', 
-                        background='#212121', 
-                        foreground='#757575',
-                        font=('Times New Roman', 14, 'bold'))
+                        background='#222a3b', 
+                        foreground=text_main,
+                        font=('Segoe UI', 11, 'bold'),
+                        borderwidth=0,
+                        relief='flat',
+                        padding=5)
         
         style.map('Treeview', 
                   background=[('selected', selection)], 
@@ -82,13 +97,28 @@ class RenamerApp:
         
         style.configure('RoundedAccent.TButton', 
                         background=accent, 
-                        foreground='#1a1a1a', 
-                        font=('Times New Roman', 13, 'bold'))
+                        foreground='#10141d', 
+                        font=('Segoe UI', 10, 'bold'),
+                        padding=(10, 8),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('RoundedAccent.TButton',
+                  background=[('active', '#7dd3fc')])
 
-        # Accent frame/label/button styles
-        style.configure('Accent.TFrame', background='#2a2132')
-        style.configure('Accent.TLabel', background='#2a2132', foreground='#f8f2ff')
-        style.configure('Accent.TButton', background=accent, foreground='#0c0812')
+        style.configure('Secondary.TButton', 
+                        background='#334155', 
+                        foreground=text_main, 
+                        font=('Segoe UI', 10, 'bold'),
+                        padding=(10, 8),
+                        relief='flat',
+                        borderwidth=0)
+        style.map('Secondary.TButton',
+                  background=[('active', '#475569')])
+
+        # Accent frame/label styles
+        style.configure('Accent.TFrame', background=header_bg)
+        style.configure('Accent.TLabel', background=header_bg, foreground=text_main)
+        style.configure('Accent.TButton', background=accent, foreground='#10141d')
         self._app_bg = bg
         self._accent = accent
         # Dialog colors stored for reuse
@@ -118,9 +148,7 @@ class RenamerApp:
             except Exception:
                 pass
             style.configure('TLabelframe', background=self.bg_color)
-            style.configure('TLabelframe.Label', background=self.bg_color, foreground='#f0ecf7')
-            style.configure('TButton', background=self.bg_color, foreground='#f0ecf7')
-            style.configure('Treeview', background='#211c24', fieldbackground='#211c24', foreground='#f3ecff')
+            style.configure('TLabelframe.Label', background=self.bg_color, foreground=text_main)
         except Exception:
             pass
         try:
@@ -129,10 +157,10 @@ class RenamerApp:
             pass
         # Rounded button styles: neutral and accent variants (dark)
         try:
-            style.configure('Rounded.TButton', background='#2b2630', foreground='#f3ecff', relief='flat', padding=(8,6), borderwidth=1)
-            style.map('Rounded.TButton', background=[('active', '#3a3242')])
-            style.configure('RoundedAccent.TButton', background=self._accent, foreground='#120a1c', relief='flat', padding=(8,6), borderwidth=1)
-            style.map('RoundedAccent.TButton', background=[('active', '#8b57e0')])
+            style.configure('Rounded.TButton', background=header_bg, foreground=text_main, relief='flat', font=('Segoe UI', 10, 'bold'), padding=(10, 6), borderwidth=0)
+            style.map('Rounded.TButton', background=[('active', '#334155')])
+            style.configure('RoundedAccent.TButton', background=self._accent, foreground='#10141d', font=('Segoe UI', 10, 'bold'), relief='flat', padding=(10, 6), borderwidth=0)
+            style.map('RoundedAccent.TButton', background=[('active', '#7dd3fc')])
             # Dialog specific styles
             style.configure('Dialog.TFrame', background=self._dialog_bg)
             style.configure('Dialog.TLabelframe', background=self._dialog_card_bg, borderwidth=1, relief='solid')
@@ -153,9 +181,9 @@ class RenamerApp:
         frm.pack(fill='both', expand=True)
 
         top = ttk.Frame(frm, style='Accent.TFrame')
-        top.pack(fill='x')
-        ttk.Button(top, text='Seleccionar carpeta', command=self.select_folder, style='RoundedAccent.TButton').pack(side='left')
-        ttk.Label(top, textvariable=self.folder).pack(side='left', padx=8)
+        top.pack(fill='x', pady=(0,6))
+        ttk.Button(top, text='Seleccionar carpeta', command=self.select_folder, style='Secondary.TButton').pack(side='left')
+        ttk.Label(top, textvariable=self.folder, style='Accent.TLabel').pack(side='left', padx=8)
 
         self.status = tk.StringVar(value='')
         ttk.Label(frm, textvariable=self.status).pack(fill='x')
@@ -167,12 +195,12 @@ class RenamerApp:
         tree_frame = ttk.Frame(content)
         tree_frame.pack(fill='both', expand=True, pady=8)
 
-        self.tree = ttk.Treeview(tree_frame, columns=('orig', 'new'), show='headings')
+        self.tree = ttk.Treeview(tree_frame, columns=('orig', 'new'), show='headings', style='Treeview')
         self.tree.heading('orig', text='Original')
         self.tree.heading('new', text='Propuesto')
 
-        vs = ttk.Scrollbar(tree_frame, orient='vertical', command=self.tree.yview)
-        hs = ttk.Scrollbar(tree_frame, orient='horizontal', command=self.tree.xview)
+        vs = ttk.Scrollbar(tree_frame, orient='vertical', command=self.tree.yview, style='Vertical.TScrollbar')
+        hs = ttk.Scrollbar(tree_frame, orient='horizontal', command=self.tree.xview, style='Horizontal.TScrollbar')
         self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
 
         # Ensure duplicate tag has high contrast on dark theme
@@ -238,18 +266,18 @@ class RenamerApp:
             pass
 
         bottom = ttk.Frame(frm, style='Accent.TFrame')
-        bottom.pack(fill='x')
+        bottom.pack(fill='x', pady=(6,0))
         self.scan_btn = ttk.Button(bottom, text='Escanear', command=self.scan, style='RoundedAccent.TButton')
-        self.scan_btn.pack(side='left')
+        self.scan_btn.pack(side='left', padx=(0,6))
         self.rename_btn = ttk.Button(bottom, text='Renombrar', command=self.rename_files, style='RoundedAccent.TButton')
         self.rename_btn.pack(side='left', padx=6)
-        self.rename_selected_btn = ttk.Button(bottom, text='Renombrar seleccionado', command=self.rename_selected, style='RoundedAccent.TButton')
+        self.rename_selected_btn = ttk.Button(bottom, text='Renombrar seleccionado', command=self.rename_selected, style='Secondary.TButton')
         self.rename_selected_btn.pack(side='left', padx=6)
-        self.delete_dup_btn = ttk.Button(bottom, text='Eliminar duplicados', command=self.delete_duplicates, style='RoundedAccent.TButton')
+        self.delete_dup_btn = ttk.Button(bottom, text='Eliminar duplicados', command=self.delete_duplicates, style='Secondary.TButton')
         self.delete_dup_btn.pack(side='left', padx=6)
-        self.delete_file_btn = ttk.Button(bottom, text='Eliminar archivo', command=self.delete_selected_file, style='RoundedAccent.TButton')
+        self.delete_file_btn = ttk.Button(bottom, text='Eliminar archivo', command=self.delete_selected_file, style='Secondary.TButton')
         self.delete_file_btn.pack(side='left', padx=6)
-        self.refine_btn = ttk.Button(bottom, text='Refinar propuesta', command=self.refine_selected_proposals, style='RoundedAccent.TButton')
+        self.refine_btn = ttk.Button(bottom, text='Refinar propuesta', command=self.refine_selected_proposals, style='Secondary.TButton')
         self.refine_btn.pack(side='left', padx=6)
 
         # load saved proposals from previous session (if any)
