@@ -1,3 +1,8 @@
+"""Script simple para detectar archivos duplicados por SHA256 en una carpeta.
+
+Uso: `python scripts/check_hashes.py <folder>`
+Por qué: encontrar duplicados de contenido antes de operaciones de limpieza.
+"""
 import hashlib
 import sys
 from pathlib import Path

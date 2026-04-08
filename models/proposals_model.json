@@ -1,0 +1,20 @@
+[
+  {
+    "file": "d:\\Mv\\Documentos\\Renameapp\\rename_archive\\test_index\\book1.txt",
+    "proposed": "Antoine de Saint-Exupéry - El principito.txt",
+    "include_author": true,
+    "include_subtitle": false
+  },
+  {
+    "file": "d:\\Mv\\Documentos\\Renameapp\\rename_archive\\test_index\\book2.txt",
+    "proposed": "Gabriel García Márquez - Cien años de soledad.txt",
+    "include_author": true,
+    "include_subtitle": false
+  },
+  {
+    "file": "d:\\Mv\\Documentos\\Renameapp\\rename_archive\\test_index\\book3.txt",
+    "proposed": "Miguel de Cervantes - Don Quijote.txt",
+    "include_author": true,
+    "include_subtitle": false
+  }
+]

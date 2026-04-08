@@ -47,6 +47,11 @@ def build_proposal(title, authors, filename):
 
 
 def _is_noisy_proposal(text: str) -> bool:
+    """Detecta propuestas ruidosas típicas que no deben usarse.
+
+    Por qué: filtrar etiquetas inválidas o basura (ej. objetos de PyPDF2)
+    antes de escribir muestras para entrenamiento.
+    """
     if not text:
         return True
     if 'IndirectObject' in text:
@@ -55,6 +60,12 @@ def _is_noisy_proposal(text: str) -> bool:
 
 
 def export(folder: Path, out_csv: Path, out_jsonl: Path, limit: int = 0, min_text_chars: int = 50, include_ocr: bool = False):
+    """Exporta muestras (texto -> propuesta) para entrenamiento.
+
+    Qué hace: recorre la tabla `files` indexada dentro de `folder`, carga
+    bloques de texto, construye una propuesta y escribe CSV/JSONL.
+    Por qué: generar datasets para entrenar o evaluar modelos de renombrado.
+    """
     if not DB_PATH.exists():
         print('Index DB not found at', DB_PATH)
         return 1

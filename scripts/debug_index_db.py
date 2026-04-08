@@ -1,10 +1,17 @@
+"""Pequeño script para inspeccionar de forma rápida la base `data/index.db`.
+
+Imprime existencia y algunos conteos/muestras para depuración local.
+"""
 from pathlib import Path
 import sqlite3
-DB=Path('data/index.db')
+# Use project-root relative path to find data/index.db reliably
+ROOT = Path(__file__).resolve().parent.parent
+DB = ROOT / 'data' / 'index.db'
+print('DB path:', DB)
 print('DB exists:', DB.exists())
 if DB.exists():
-    conn=sqlite3.connect(str(DB))
-    cur=conn.cursor()
+    conn = sqlite3.connect(str(DB))
+    cur = conn.cursor()
     try:
         cur.execute('SELECT count(*) FROM files')
         print('files_count=', cur.fetchone()[0])

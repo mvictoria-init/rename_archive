@@ -1,8 +1,8 @@
-"""Helpers to read the index DB created by `scripts/indexer.py`.
+"""Acceso ligero a la base de datos de índice `data/index.db`.
 
-Functions:
-- db_path(): path to data/index.db
-- files_in_folder(folder): yield dicts for files whose absolute path starts with `folder`
+Qué hace: funciones auxiliares para comprobar existencia del fichero DB,
+conectar y obtener listados filtrados por carpeta o por hash. Diseñado
+para usarse desde la GUI y los scripts de indexado.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -14,17 +14,23 @@ DB_PATH = ROOT / 'data' / 'index.db'
 
 
 def db_exists() -> bool:
+    """Devuelve True si `data/index.db` existe.
+
+    Por qué: evitar errores al intentar conectar si la base de datos no existe.
+    """
     return DB_PATH.exists()
 
 
 def _connect():
+    """Crear y devolver una nueva conexión sqlite3 al archivo de índice."""
     return sqlite3.connect(str(DB_PATH))
 
 
 def files_in_folder(folder: Path) -> Iterator[dict]:
-    """Yield rows for files inside `folder`.
+    """Generador de filas para archivos cuyo path absoluto empieza por `folder`.
 
-    Each yielded dict contains: path, size, sha256, title, authors
+    Cada dict yieldeado contiene: path, size, sha256, title, authors.
+    Por qué: permitir cargar rápidamente la vista de la GUI desde el índice.
     """
     folder = Path(folder).resolve()
     if not db_exists():
@@ -46,7 +52,7 @@ def files_in_folder(folder: Path) -> Iterator[dict]:
 
 
 def find_files_by_hash(sha256: str) -> list[dict]:
-    """Return list of dicts for files with the given SHA256."""
+    """Devuelve una lista de filas (dict) de archivos con el SHA256 especificado."""
     if not db_exists():
         return []
     conn = _connect()
@@ -61,6 +67,10 @@ def find_files_by_hash(sha256: str) -> list[dict]:
 
 
 def os_sep() -> str:
-    # sqlite LIKE expects backslashes to match literally; return os-specific separator
+    """Devuelve el separador de ruta del sistema operativo.
+
+    Nota: sqlite LIKE trata las barras invertidas literalmente en Windows,
+    por eso se maneja el separador de forma explícita.
+    """
     import os
     return os.sep

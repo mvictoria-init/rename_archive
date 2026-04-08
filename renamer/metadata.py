@@ -1,10 +1,25 @@
 import re
 import zipfile
 from pathlib import Path
-from .utils import normalize_authors
+from .utils import normalize_authors, is_suspect_title, is_suspicious_author, guess_title_author_from_filename
+
+
+"""Extracción flexible de metadatos (título, autor) para distintos formatos.
+
+Cada extractor intenta múltiples estrategias (librerías externas y
+heurísticas) y devuelve una tupla (title, author). Las funciones están
+diseñadas para ser tolerantes: si falla un método, prueban otra alternativa.
+"""
 
 
 def extract_pdf_metadata(path):
+    """Extrae título y autor de un PDF.
+
+    Qué hace: intenta PyMuPDF (fitz) primero; si falla usa PyPDF2 y,
+    en última instancia, heurísticas sobre el texto de la primera página.
+    Por qué: los PDF contienen metadatos en distintos formatos y esta
+    función unifica la extracción de forma tolerante.
+    """
     # Try PyMuPDF (fitz) first as it is generally more robust
     try:
         import fitz
@@ -12,34 +27,136 @@ def extract_pdf_metadata(path):
         meta = doc.metadata
         title = meta.get('title')
         author = meta.get('author')
-        if not title or not author:
-            # simple text extraction fallback for first page
-            # often title is first line, author is second
-             if doc.page_count > 0:
-                p = doc[0]
-                # get text blocks
-                blocks = p.get_text("blocks")
-                blocks.sort(key=lambda b: b[1]) # sort by vertical position
-                lines = []
-                for b in blocks:
-                    # block text; b[4]
-                    txt = b[4].strip()
-                    if txt:
-                        lines.append(txt)
-                if not title and lines:
-                    title = lines[0].split('\n')[0]
-                if not author and len(lines) > 1:
-                    # heuristic: look for "By X" or just second line
-                    sec = lines[1].replace('\n', ' ')
-                    m = re.search(r'(?:by|por)\s+([\w\s\.]+)', sec, flags=re.IGNORECASE)
-                    if m:
-                        author = m.group(1)
+        subtitle = None
+
+        # If metadata incomplete, inspect first pages using font sizes and layout
+        if doc.page_count > 0:
+            try:
+                spans = []
+                idx = 0
+                pages_to_check = min(3, doc.page_count)
+                for pno in range(pages_to_check):
+                    page = doc[pno]
+                    try:
+                        d = page.get_text('dict')
+                    except Exception:
+                        # fallback to blocks/text
+                        blocks = page.get_text('blocks')
+                        for b in blocks:
+                            txt = b[4].strip()
+                            if txt:
+                                spans.append({'page': pno, 'y': b[1], 'text': txt, 'size': None, 'idx': idx})
+                                idx += 1
+                        continue
+
+                    for block in d.get('blocks', []):
+                        if block.get('type') != 0:
+                            continue
+                        for line in block.get('lines', []):
+                            y = line.get('bbox', [0, 0, 0, 0])[1]
+                            for span in line.get('spans', []):
+                                text = span.get('text', '').strip()
+                                if not text:
+                                    continue
+                                size = span.get('size', 0) or 0
+                                font = span.get('font', '')
+                                color = span.get('color', None)
+                                spans.append({'page': pno, 'y': y, 'text': text, 'size': size, 'font': font, 'color': color, 'idx': idx})
+                                idx += 1
+
+                # group spans into lines per page preserving order
+                page_lines = {}
+                for s in spans:
+                    key = (s['page'], int(round(s['y'])))
+                    if key not in page_lines:
+                        page_lines[key] = {'page': s['page'], 'y': s['y'], 'spans': []}
+                    page_lines[key]['spans'].append(s)
+
+                # build ordered lines per page
+                lines_by_page = {}
+                for (pno, y), data in sorted(page_lines.items(), key=lambda kv: (kv[0][0], kv[1]['y'])):
+                    spans_list = sorted(data['spans'], key=lambda x: x['idx'])
+                    text = ' '.join([sp['text'] for sp in spans_list]).strip()
+                    max_size = max([sp.get('size') or 0 for sp in spans_list]) if spans_list else 0
+                    lines_by_page.setdefault(pno, []).append({'y': data['y'], 'text': text, 'size': max_size})
+
+                # Heuristic: prefer the most prominent single line as title (more conservative)
+                found_title = None
+                found_author = None
+                found_sub = None
+                for pno in range(min(2, len(lines_by_page))):
+                    lines = lines_by_page.get(pno, [])
+                    if not lines:
+                        continue
+                    sizes = [l['size'] for l in lines if l.get('size')]
+                    if not sizes:
+                        continue
+                    max_size = max(sizes)
+                    # candidate title lines: those with size close to max_size
+                    title_candidates = [l for l in lines if l.get('size') and l['size'] >= max_size * 0.85 and len(l['text']) > 1]
+                    if title_candidates:
+                        # pick the single best candidate (largest size, then longest text)
+                        primary = sorted(title_candidates, key=lambda z: (z.get('size', 0), len(z.get('text', ''))), reverse=True)[0]
+                        found_title = primary.get('text')
+                        primary_size = primary.get('size', max_size)
+                        last_y = primary.get('y')
+                        # subtitle: first reasonable line below the primary title
+                        below = [l for l in lines if l['y'] > last_y]
+                        for bline in below:
+                            if bline.get('size') and bline['size'] >= primary_size * 0.5 and 2 < len(bline['text']) < 200:
+                                found_sub = bline['text']
+                                break
+                        # author: look for explicit 'By' lines or short lines in a small zone below
+                        author_candidates = []
+                        search_zone = [l for l in lines if l['y'] > last_y and l['y'] <= last_y + 250]
+                        for l in search_zone[:6]:
+                            m = re.search(r'(?:by|por)\s+(.+)', l['text'], flags=re.IGNORECASE)
+                            if m:
+                                found_author = m.group(1)
+                                break
+                            if 1 < len(l['text'].split()) <= 6 and re.search(r'[A-ZÁÉÍÓÚÑ]', l['text']):
+                                author_candidates.append(l['text'])
+                        if not found_author and author_candidates:
+                            found_author = author_candidates[0]
+                        if found_title or found_author or found_sub:
+                            break
+
+                if found_title and not title:
+                    # ignore obviously bad title candidates
+                    if not is_suspect_title(found_title):
+                        title = found_title
                     else:
-                        author = sec
+                        found_title = None
+                if found_author and not author:
+                    author = found_author
+                if found_sub:
+                    subtitle = found_sub
+            except Exception:
+                pass
+
         doc.close()
+        # normalize and sanity-check
+        # if title appears suspect (credits, translators, repeated text), fallback to filename guess
+        if title and is_suspect_title(title):
+            title = None
+        if subtitle and is_suspect_title(subtitle):
+            subtitle = None
+        # try to recover from filename if metadata seems unreliable
+        if not title or (author and is_suspicious_author(author)):
+            try:
+                gtitle, gauthor = guess_title_author_from_filename(path)
+                if (not title or is_suspect_title(title)) and gtitle:
+                    title = gtitle
+                if (not author or is_suspicious_author(author)) and gauthor:
+                    author = gauthor
+            except Exception:
+                pass
+
         author = normalize_authors(author)
         title = title.strip() if title else title
-        return (title, author)
+        if subtitle:
+            subtitle = subtitle.strip()
+        return (title, author, subtitle)
     except ImportError:
         pass
     except Exception:
@@ -99,12 +216,17 @@ def extract_pdf_metadata(path):
                                 author = second
             except Exception:
                 pass
-        return (title, author)
+        return (title, author, None)
     except Exception:
-        return (None, None)
+        return (None, None, None)
 
 
 def extract_docx_metadata(path):
+    """Extrae título y autor de un documento .docx.
+
+    Qué hace: usa python-docx para leer propiedades del documento
+    (core_properties). Por qué: muchos .docx incluyen metadatos útiles.
+    """
     try:
         from docx import Document
         doc = Document(path)
@@ -112,12 +234,30 @@ def extract_docx_metadata(path):
         title = props.title or None
         author = props.author or None
         author = normalize_authors(author)
-        return (title, author)
+        # Try to obtain a subtitle from first paragraphs if not present
+        subtitle = None
+        try:
+            paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            if not title and paras:
+                title = paras[0]
+                if len(paras) > 1:
+                    cand = paras[1]
+                    if 3 < len(cand.split()) < 12:
+                        subtitle = cand
+        except Exception:
+            pass
+        return (title, author, subtitle)
     except Exception:
-        return (None, None)
+        return (None, None, None)
 
 
 def extract_epub_metadata(path):
+    """Extrae título y autor de un EPUB.
+
+    Qué hace: intenta usar ebooklib; si falla, abre el ZIP y busca
+    el OPF/metadata de forma tolerante. Por qué: soportar EPUBs creados
+    con distintas herramientas y codificaciones.
+    """
     try:
         from ebooklib import epub
         import contextlib, os
@@ -134,7 +274,7 @@ def extract_epub_metadata(path):
         if creators:
             auths = [c[0] for c in creators if c and c[0]]
             author = normalize_authors(auths)
-        return (title, author)
+        return (title, author, None)
     except Exception:
         # Fallback: attempt tolerant ZIP/OPF parsing and liberal decoding
         try:
@@ -182,19 +322,25 @@ def extract_epub_metadata(path):
                         else:
                             author = author + ', ' + (elem.text or '')
                 author = normalize_authors(author)
-                return (title, author)
+                return (title, author, None)
         except Exception:
-            return (None, None)
-    return (None, None)
+            return (None, None, None)
+        return (None, None, None)
 
 
 def extract_txt_metadata(path):
+    """Extrae título/autor de archivos de texto plano mediante heurísticas.
+
+    Qué hace: lee las primeras líneas buscando patrones "Title:" o "Author:";
+    por qué: muchos textos simples incluyen cabeceras con metadatos.
+    """
     try:
         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
             raw = f.read(4000)
             lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
             title = None
             author = None
+            subtitle = None
             for ln in lines[:10]:
                 m_t = re.match(r'Title\s*[:\-]\s*(.+)', ln, flags=re.IGNORECASE)
                 m_a = re.match(r'Author\s*[:\-]\s*(.+)', ln, flags=re.IGNORECASE)
@@ -209,13 +355,23 @@ def extract_txt_metadata(path):
                 m = re.search(r'by\s+(.+)', second, flags=re.IGNORECASE)
                 if m:
                     author = m.group(1).strip()
+            # attempt subtitle detection: if second line is short and not an author, treat as subtitle
+            if len(lines) > 1:
+                second = lines[1]
+                if not re.search(r'author\s*[:\-]|by\s+', second, flags=re.IGNORECASE):
+                    if 2 < len(second.split()) < 12:
+                        subtitle = second
             author = normalize_authors(author)
-            return (title, author)
+            return (title, author, subtitle)
     except Exception:
-        return (None, None)
+        return (None, None, None)
 
 
 def extract_metadata(path: Path):
+    """Selector de extractor por extensión.
+
+    Devuelve (title, author, subtitle) usando el extractor apropiado según la extensión.
+    """
     ext = path.suffix.lower()
     if ext == '.pdf':
         return extract_pdf_metadata(str(path))
@@ -225,4 +381,4 @@ def extract_metadata(path: Path):
         return extract_epub_metadata(str(path))
     if ext in ('.txt', '.md'):
         return extract_txt_metadata(str(path))
-    return (None, None)
+    return (None, None, None)

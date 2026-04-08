@@ -1,12 +1,20 @@
 import re
 import os
 
-def sanitize(s: str) -> str:
-    """Return a filesystem-safe, human-friendly string.
+"""Utilidades pequeñas para normalizar textos y metadatos.
 
-    This removes control characters, reserved Windows filename characters,
-    trims trailing spaces/dots, collapses whitespace and guarantees a
-    non-empty return (uses 'Unknown' as fallback).
+Cada función incluye una descripción breve en español indicando qué hace
+y por qué existe: facilitar la generación de nombres de archivo,
+normalizar autores y presentar tamaños legibles para la interfaz.
+"""
+
+
+def sanitize(s: str) -> str:
+    """Devuelve una cadena segura para usar como nombre de fichero.
+
+    Qué hace: elimina caracteres de control, caracteres reservados en
+    Windows, colapsa espacios y recorta puntos/espacios finales.
+    Por qué: asegurar que los nombres propuestos sean válidos y legibles.
     """
     if not s:
         return "Unknown"
@@ -32,10 +40,11 @@ def sanitize(s: str) -> str:
 
 
 def normalize_authors(author_field):
-    """Normalize an author field into a unified string "First Last, First2 Last2".
+    """Normaliza distintos formatos de autor a una cadena única.
 
-    Handles lists, comma-separated "Last, First" forms, and common separators.
-    Returns a comma-separated string or None.
+    Qué hace: acepta listas, cadenas separadas por comas o separadores
+    comunes y devuelve "Nombre Apellido, Nombre2 Apellido2" o None.
+    Por qué: unificar formatos heterogéneos para mostrar/autogenerar nombres.
     """
     if not author_field:
         return None
@@ -82,16 +91,19 @@ def normalize_authors(author_field):
     seen = set()
     out = []
     for n in normalized:
-        if n not in seen:
-            seen.add(n)
+        key = n.strip().lower()
+        if key not in seen:
+            seen.add(key)
             out.append(n)
     return ', '.join(out) if out else None
 
 
 def format_authors_for_filename(auth_norm, max_authors=3):
-    """Format normalized authors for filenames, limiting to `max_authors`.
+    """Formatea autores normalizados para incluir en un nombre de fichero.
 
-    Returns an empty string when no authors are available.
+    Qué hace: toma la cadena normalizada y devuelve una lista limitada
+    (ej. "Autor1, Autor2") o una cadena vacía si no hay autores.
+    Por qué: generar prefijos de autor compactos para los nombres propuestos.
     """
     if not auth_norm:
         return ''
@@ -110,7 +122,11 @@ def format_authors_for_filename(auth_norm, max_authors=3):
 
 
 def human_readable_size(n):
-    """Convert a size in bytes to a human-readable string (KB, MB, GB...)."""
+    """Convierte bytes a una cadena legible (KB, MB, GB...).
+
+    Qué hace: formatea un entero de bytes en unidades humanas.
+    Por qué: presentar tamaños en la interfaz de forma comprensible.
+    """
     try:
         n = int(n)
     except Exception:
@@ -123,9 +139,11 @@ def human_readable_size(n):
 
 
 def guess_title_author_from_filename(filename):
-    """Heuristics to extract (title, author) from a messy filename.
+    """Intentos heurísticos para extraer (título, autor) de un nombre de fichero.
 
-    Returns (title, author) where any may be None.
+    Qué hace: limpia tokens ruidosos, detecta patrones "Autor - Título" y
+    devuelve una tupla (title, author) donde cualquiera puede ser None.
+    Por qué: ofrecer sugerencias razonables cuando faltan metadatos internos.
     """
     if not filename:
         return None, None
@@ -194,3 +212,106 @@ def guess_title_author_from_filename(filename):
     if len(words) <= 3:
         return None, sanitize(s)
     return sanitize(s), None
+
+
+def normalize_author_case(author: str) -> str:
+    """Normaliza la capitalización de un autor: primera letra mayúscula y resto minúsculas por palabra.
+
+    Maneja compuestos, guiones y apóstrofes. Devuelve `None` si `author` es falsy.
+    """
+    if not author:
+        return None
+    # Si ya es lista o separado por comas, conservar tal como está (caller debe decidir)
+    s = str(author).strip()
+    def cap_part(p):
+        # mantén apóstrofes y guiones, capitalizando subpartes
+        parts = re.split(r"([\-'])", p)
+        out = []
+        for part in parts:
+            if part in ("-", "'"):
+                out.append(part)
+            else:
+                if part:
+                    out.append(part[0].upper() + part[1:].lower() if len(part) > 1 else part.upper())
+        return ''.join(out)
+
+    words = [w for w in re.split(r"\s+", s) if w]
+    normalized_words = [cap_part(w) for w in words]
+    return ' '.join(normalized_words)
+
+
+def normalize_title_case(title: str) -> str:
+    """Normaliza título para que solo la primera palabra tenga mayúscula inicial.
+
+    Ejemplo: 'CIEN AÑOS DE SOLEDAD' -> 'Cien años de soledad'
+    Devuelve `None` si `title` es falsy.
+    """
+    if not title:
+        return None
+    s = str(title).strip()
+    # collapse whitespace
+    s = re.sub(r'\s+', ' ', s)
+    words = s.split(' ')
+    if not words:
+        return None
+    first = words[0]
+    rest = words[1:]
+    def norm_word(w):
+        return w.lower()
+    first_norm = first[0].upper() + first[1:].lower() if len(first) > 1 else first.upper()
+    rest_norm = ' '.join([norm_word(w) for w in rest])
+    return (first_norm + (' ' + rest_norm if rest_norm else '')).strip()
+
+
+def is_suspect_title(title: str) -> bool:
+    """Detecta títulos que probablemente no son títulos reales (créditos, traducciones, repetidos).
+
+    Regla práctica: busca tokens típicos de créditos/traducción/edición, títulos excesivamente largos
+    o frases repetitivas que suelen aparecer en páginas de créditos y no en la portada.
+    """
+    if not title:
+        return True
+    s = title.lower()
+    # tokens que suelen indicar que no es el título
+    bad_tokens = [
+        'traducción', 'traduccion', 'tradu', 'corrección', 'correccion', 'grupo', 'grupo de',
+        'editorial', 'editor', 'documento', 'document', 'microsoft word', 'documento1', 'document1',
+        'scan', 'scanned', 'copyright', '©', 'licencia', 'versión', 'version', 'www.', 'http', 'anonimo', 'anonymous'
+    ]
+    for bt in bad_tokens:
+        if bt in s:
+            return True
+    # títulos excesivamente largos o con mucha repetición
+    if len(s) > 220:
+        return True
+    tokens = [t for t in s.split() if t]
+    if len(tokens) < 2:
+        # demasiado corto para ser un título (probable ruido)
+        return True
+    # detectar frases con poca variación (p. ej. el mismo término repetido varias veces)
+    uniq = set(tokens)
+    if len(tokens) >= 6 and len(uniq) <= max(3, len(tokens) // 4):
+        return True
+    return False
+
+
+def is_suspicious_author(author: str) -> bool:
+    """Heurísticas simples para detectar autores que parecen basura o créditos de edición.
+
+    Devuelve True si el autor es claramente irrelevante ("Administrator", tokens de traducción,
+    nombres demasiado genéricos, etc.).
+    """
+    if not author:
+        return True
+    s = str(author).strip().lower()
+    bad = ['administrator', 'admin', 'unknown', 'autor', 'autor:', 'user', 'anonimo', 'anonymous', 'editorial', 'editor', 'grupo', 'tradu']
+    for b in bad:
+        if b in s:
+            return True
+    parts = [p for p in re.split(r'[,;\\/]|\band\b|\by\b', s) if p.strip()]
+    # si solo hay un token corto (p.ej. 'img' o 'doc') considerarlo sospechoso
+    if len(parts) == 1:
+        token = parts[0].strip()
+        if len(token) <= 3:
+            return True
+    return False

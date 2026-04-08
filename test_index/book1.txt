@@ -1,0 +1,6 @@
+Title: El principito
+Author: Antoine de Saint-Exupéry
+
+Contenido de prueba breve para El principito. Este es un archivo de ejemplo para el pipeline de indexado.
+
+Capítulo 1: Texto de ejemplo...
