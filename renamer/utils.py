@@ -9,6 +9,38 @@ normalizar autores y presentar tamaños legibles para la interfaz.
 """
 
 
+def remove_banned_phrases(text: str) -> str:
+    """Elimina expresiones no deseadas del texto (ej. 'spanish version').
+    
+    Qué hace: busca en una lista de expresiones regulares y las elimina,
+    limpiando también los paréntesis vacíos que puedan quedar.
+    Por qué: evitar que el nombre final del archivo contenga spam o tags.
+    """
+    if not text:
+        return text
+    
+    banned_regexes = [
+        r'\b(?:spanish|english)\s+(?:version|edition|ed)\b',
+        r'\bedici[oó]n\s+en\s+espa[nñ]ol\b',
+        r'\bedici[oó]n(?: revisada| especial)?\b',
+        r'\(c\)\s*proyecto\s*espartaco',
+        r'---private---',
+        r'nueva\s*carpeta',
+        r'\(author\)',
+        r'\(spanish edition\)',
+        r'\.(?:pdf|epub|doc|docx|rtf|txt|html)(?:\.(?:pdf|epub|doc|docx|rtf|txt|html))?$',
+    ]
+    t = str(text)
+    for b in banned_regexes:
+        t = re.sub(b, '', t, flags=re.IGNORECASE)
+    
+    # Limpiar posibles paréntesis o corchetes que hayan quedado vacíos
+    t = re.sub(r'\(\s*\)', '', t)
+    t = re.sub(r'\[\s*\]', '', t)
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip(' -_.,()[]{}')
+
+
 def sanitize(s: str) -> str:
     """Devuelve una cadena segura para usar como nombre de fichero.
 
@@ -114,6 +146,7 @@ def format_authors_for_filename(auth_norm, max_authors=3):
     else:
         authors = [str(auth_norm).strip()]
     authors = [sanitize(a) for a in authors if a]
+    authors = [re.sub(r'\.(pdf|epub|doc|docx|rtf|txt|html)$', '', a, flags=re.IGNORECASE) for a in authors]
     if not authors:
         return ''
     if len(authors) <= max_authors:
@@ -153,25 +186,30 @@ def guess_title_author_from_filename(filename):
         if not text:
             return ''
         t = text
-        # normalize separators
-        t = re.sub(r'[._]+', ' ', t)
-        t = t.replace('—', '-').replace('–', '-')
-        # remove common noise tokens and words
-        t = re.sub(r'\b(Microsoft Word|Documento|Document|Scan|IMG|IMG_?\d+|Page_?\d+|Document1|Documento1)\b', '', t, flags=re.IGNORECASE)
-        # remove bracketed sections
-        t = re.sub(r'\[[^\]]*\]|\([^\)]*\)|\{[^\}]*\}', '', t)
-        # remove stray 'cf', 'cf.' and similar references
-        t = re.sub(r'\b(cf|cf\.|cf:)\b', '', t, flags=re.IGNORECASE)
-        # remove standalone single letters (likely artifacts)
-        t = re.sub(r'\b[a-zA-Z]\b', '', t)
-        # remove long runs of non-word characters
-        t = re.sub(r'[^\w\s\-]', ' ', t)
-        # collapse multiple separators/spaces
+        # Clean double extensions first
+        t = re.sub(r'\.(pdf|epub|doc|docx|rtf|txt|html)\.(pdf|epub|doc|docx|rtf|txt|html)$', r'.\1', t, flags=re.IGNORECASE)
+        
+        # Remove technical noise
+        noise = [r'---private---', r'\(c\)\s*proyecto\s*espartaco', r'nueva\s*carpeta', r'copy\s*of', r'copia\s*de']
+        for n in noise:
+            t = re.sub(n, '', t, flags=re.IGNORECASE)
+
+        # if underscores are used as separators (pattern: Title_Author or Author_Title)
+        if '_' in t and '-' not in t:
+            # check if it looks like Title_Author_Name
+            t = t.replace('_', ' - ')
+        
+        # normalize remaining dots (but not the one before extension if present, though splitext already removed it)
         t = re.sub(r'\s+', ' ', t)
         t = t.strip(' -_.,')
         return t.strip()
 
     s = clean_filename_text(name)
+    
+    # Handle (Categoria) prefix: e.g. "(Ingles) Autor - Titulo"
+    m_cat = re.match(r'^\(([^)]+)\)\s+(.+)', s)
+    if m_cat:
+        s = m_cat.group(2).strip()
 
     # Prefer splits on ' - ' or ' -' or '- '
     if '-' in s:
@@ -210,6 +248,9 @@ def guess_title_author_from_filename(filename):
     # fallback: if string has many uppercase words, assume title; if short, assume author
     words = s.split()
     if len(words) <= 3:
+        # Ignore starting articles as authors
+        if words[0].lower() in ['el', 'la', 'los', 'las', 'un', 'una', 'en']:
+             return sanitize(s), None
         return None, sanitize(s)
     return sanitize(s), None
 
@@ -237,13 +278,18 @@ def normalize_author_case(author: str) -> str:
 
     words = [w for w in re.split(r"\s+", s) if w]
     normalized_words = [cap_part(w) for w in words]
-    return ' '.join(normalized_words)
+    res = ' '.join(normalized_words)
+    # Final cleanup for residual brackets
+    res = re.sub(r'\(.*$', '', res).strip(' ,(')
+    return res
 
 
 def normalize_title_case(title: str) -> str:
-    """Normaliza título para que solo la primera palabra tenga mayúscula inicial.
+    """Normaliza un título usando el estilo Titulo (Title Case) para idiomas latinos/inglés.
 
-    Ejemplo: 'CIEN AÑOS DE SOLEDAD' -> 'Cien años de soledad'
+    Ejemplo: 'CIEN AÑOS DE SOLEDAD' -> 'Cien Años de Soledad'
+    Ejemplo: 'el señor de los anillos' -> 'El Señor de los Anillos'
+    Mantiene minúsculas las palabras de enlace a menos que sean la primera palabra.
     Devuelve `None` si `title` es falsy.
     """
     if not title:
@@ -254,13 +300,63 @@ def normalize_title_case(title: str) -> str:
     words = s.split(' ')
     if not words:
         return None
-    first = words[0]
-    rest = words[1:]
-    def norm_word(w):
-        return w.lower()
-    first_norm = first[0].upper() + first[1:].lower() if len(first) > 1 else first.upper()
-    rest_norm = ' '.join([norm_word(w) for w in rest])
-    return (first_norm + (' ' + rest_norm if rest_norm else '')).strip()
+    
+    stopwords = {
+        'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 
+        'de', 'del', 'a', 'ante', 'con', 'en', 'para', 'por', 'y', 'e', 'o', 'u', 'al',
+        'the', 'an', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'from', 'by', 'of', 'in'
+    }
+
+    out = []
+    for i, w in enumerate(words):
+        w_lower = w.lower()
+        if i == 0 or w_lower not in stopwords:
+            # Capitalizar primera letra, dejar el resto minúscula
+            capitalized = w_lower.capitalize()
+            out.append(capitalized)
+        else:
+            out.append(w_lower)
+            
+    return ' '.join(out)
+
+
+def extract_series_from_text(text: str):
+    """Extrae la información de serie y número de un texto.
+    
+    Devuelve una tupla (nueva_cadena_limpia, nombre_serie, numero_serie).
+    Si no encuentra nada, devuelve (text, None, None).
+    """
+    if not text:
+        return (text, None, None)
+    
+    patterns = [
+        # (Nombre Serie - 1) o (Nombre Serie 1)
+        r'\((.*?)\s*[-#]?\s*(\d+)\)',
+        # [Nombre Serie - 1]
+        r'\[(.*?)\s*[-#]?\s*(\d+)\]',
+        # Serie Nombre #2 o Libro Nombre 3
+        r'\b(?:saga|serie|libro|volumen|vol\.?|book)\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)\s*#?\s*(\d+)\b',
+        # Nombre Serie #3
+        r'([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)\s+#\s*(\d+)\b'
+    ]
+    
+    import re
+    t = str(text)
+    for pat in patterns:
+        m = re.search(pat, t, flags=re.IGNORECASE)
+        if m:
+            series_name = m.group(1).strip()
+            series_num = m.group(2).strip()
+            full_match = m.group(0)
+            clean_text = t.replace(full_match, '').strip(' -_.()[]{}')
+            clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+            
+            # Limpiar ruido del nombre de la serie
+            series_name = re.sub(r'^(?:saga|serie|libro|volumen|vol\.?|book)\s+', '', series_name, flags=re.IGNORECASE).strip()
+            if series_name and series_num:
+                return (clean_text, series_name, series_num)
+            
+    return (text, None, None)
 
 
 def is_suspect_title(title: str) -> bool:
@@ -276,7 +372,12 @@ def is_suspect_title(title: str) -> bool:
     bad_tokens = [
         'traducción', 'traduccion', 'tradu', 'corrección', 'correccion', 'grupo', 'grupo de',
         'editorial', 'editor', 'documento', 'document', 'microsoft word', 'documento1', 'document1',
-        'scan', 'scanned', 'copyright', '©', 'licencia', 'versión', 'version', 'www.', 'http', 'anonimo', 'anonymous'
+        'scan', 'scanned', 'copyright', '©', 'licencia', 'versión', 'version', 'www.', 'http', 'anonimo', 'anonymous',
+        '@gmail', '@yahoo', '@hotmail', '.com', '.org', '.net', 's.a.', 's.l.', 'school', 'edicion',
+        'impresión', 'impresion', 'fax', 'predef', 'uso académico', 'uso academico', 'comercial',
+        'freedom press', 'diaspar', 'pc', 'gerson o.', 'bullzip', 'www.bullzip',
+        'rene contreras', 'marina cruz', 'andres ruiz', 'andres ruiz kdm', 'yuste',
+        'jesus villacorta', 'antonio garcia', 'cristo pantoja', 'equipo 1', 'jesus', 'antonio'
     ]
     for bt in bad_tokens:
         if bt in s:
@@ -285,8 +386,7 @@ def is_suspect_title(title: str) -> bool:
     if len(s) > 220:
         return True
     tokens = [t for t in s.split() if t]
-    if len(tokens) < 2:
-        # demasiado corto para ser un título (probable ruido)
+    if len(tokens) < 1:
         return True
     # detectar frases con poca variación (p. ej. el mismo término repetido varias veces)
     uniq = set(tokens)
@@ -304,14 +404,21 @@ def is_suspicious_author(author: str) -> bool:
     if not author:
         return True
     s = str(author).strip().lower()
-    bad = ['administrator', 'admin', 'unknown', 'autor', 'autor:', 'user', 'anonimo', 'anonymous', 'editorial', 'editor', 'grupo', 'tradu']
+    bad = ['administrator', 'admin', 'unknown', 'autor', 'autor:', 'user', 'anonimo', 'anonymous',
+           'editorial', 'editor', 'grupo', 'tradu', 'img', 'doc', 'pdf', '©', 'copyright',
+           'www.', 'http', '.com', '.org', 's.a.', 's.l.', 'school', '@gmail', '@yahoo', '@hotmail',
+           'freedom press', 'diaspar', 'pc', 'predef', 'fax', 'comercial',
+           'gerson o.', 'bullzip', 'dt', 'montse', 'juan', 'papoto', 'funda2', 'writer',
+           'rene contreras', 'marina cruz', 'andres ruiz', 'andres ruiz kdm', 'yuste',
+           'facultad de educacion', 'facultad de', 'universidad de', 'departamento de',
+           'jesus villacorta', 'antonio garcia', 'cristo pantoja', 'equipo 1', 'jesus', 'antonio']
     for b in bad:
         if b in s:
             return True
     parts = [p for p in re.split(r'[,;\\/]|\band\b|\by\b', s) if p.strip()]
-    # si solo hay un token corto (p.ej. 'img' o 'doc') considerarlo sospechoso
+    # si solo hay un caracter suelto, considerarlo sospechoso, pero permitir autores cortos como Poe o Eco
     if len(parts) == 1:
         token = parts[0].strip()
-        if len(token) <= 3:
+        if len(token) <= 1:
             return True
     return False

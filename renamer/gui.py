@@ -80,7 +80,7 @@ class RenamerApp:
                         fieldbackground=tabla_bg, 
                         foreground=tabla_texto,
                         font=('Segoe UI', 11),
-                        rowheight=35,
+                        rowheight=28,
                         borderwidth=0,
                         relief='flat')
         style.configure('Treeview.Heading', 
@@ -800,15 +800,6 @@ class RenamerApp:
             src = Path(orig)
             safe_new = sanitize(new)
             dst = Path(folder) / safe_new
-            if dst.exists():
-                base = dst.stem
-                idx = 1
-                while True:
-                    candidate = Path(folder) / f"{base} ({idx}){dst.suffix}"
-                    if not candidate.exists():
-                        dst = candidate
-                        break
-                    idx += 1
             try:
                 shutil.move(str(src), str(dst))
                 renamed_paths.append((orig, fh))

@@ -29,12 +29,13 @@ def extract_pdf_metadata(path):
         author = meta.get('author')
         subtitle = None
 
-        # If metadata incomplete, inspect first pages using font sizes and layout
-        if doc.page_count > 0:
+        # Solo inspeccionar páginas si los metadatos base están vacíos o sospechosos (Optimization para colecciones grandes)
+        if (not title or is_suspect_title(title) or not author or is_suspicious_author(author)) and doc.page_count > 0:
             try:
                 spans = []
                 idx = 0
-                pages_to_check = min(3, doc.page_count)
+                # Ampliado a 10 páginas para capturar bien los títulos largos o portadas desplazadas
+                pages_to_check = min(10, doc.page_count)
                 for pno in range(pages_to_check):
                     page = doc[pno]
                     try:
@@ -80,46 +81,62 @@ def extract_pdf_metadata(path):
                     max_size = max([sp.get('size') or 0 for sp in spans_list]) if spans_list else 0
                     lines_by_page.setdefault(pno, []).append({'y': data['y'], 'text': text, 'size': max_size})
 
-                # Heuristic: prefer the most prominent single line as title (more conservative)
+                # Unificar todas las líneas de todas las páginas para encontrar el máximo global
+                all_lines = []
+                for pno, lns in lines_by_page.items():
+                    if pno >= 10: break
+                    for l in lns:
+                        # ignorar lineas muy cortas o pura putuacion/números
+                        if l.get('size') and len(l.get('text', '').strip()) > 3:
+                            all_lines.append(l)
+
                 found_title = None
                 found_author = None
                 found_sub = None
-                for pno in range(min(2, len(lines_by_page))):
-                    lines = lines_by_page.get(pno, [])
-                    if not lines:
-                        continue
-                    sizes = [l['size'] for l in lines if l.get('size')]
-                    if not sizes:
-                        continue
-                    max_size = max(sizes)
-                    # candidate title lines: those with size close to max_size
-                    title_candidates = [l for l in lines if l.get('size') and l['size'] >= max_size * 0.85 and len(l['text']) > 1]
+                
+                if all_lines:
+                    # Encontrar el tamaño máximo global
+                    max_size = max([l['size'] for l in all_lines])
+                    
+                    # Titulo: El texto de tamano maximo (umbral 95% para ser mas selectivo)
+                    title_candidates = [l for l in all_lines if l['size'] >= max_size * 0.95]
                     if title_candidates:
-                        # pick the single best candidate (largest size, then longest text)
                         primary = sorted(title_candidates, key=lambda z: (z.get('size', 0), len(z.get('text', ''))), reverse=True)[0]
                         found_title = primary.get('text')
                         primary_size = primary.get('size', max_size)
-                        last_y = primary.get('y')
-                        # subtitle: first reasonable line below the primary title
-                        below = [l for l in lines if l['y'] > last_y]
-                        for bline in below:
-                            if bline.get('size') and bline['size'] >= primary_size * 0.5 and 2 < len(bline['text']) < 200:
-                                found_sub = bline['text']
-                                break
-                        # author: look for explicit 'By' lines or short lines in a small zone below
-                        author_candidates = []
-                        search_zone = [l for l in lines if l['y'] > last_y and l['y'] <= last_y + 250]
-                        for l in search_zone[:6]:
+                        
+                        # Quitar el titulo de las lineas disponibles
+                        all_lines = [l for l in all_lines if l != primary]
+                        
+                    # Autor: El segundo tamaño más grande (o basado en keywords)
+                    if all_lines:
+                        # Buscar por keyword 'por' o 'by'
+                        for l in all_lines[:30]: # buscar en las primeras lineas
                             m = re.search(r'(?:by|por)\s+(.+)', l['text'], flags=re.IGNORECASE)
-                            if m:
+                            if m and len(m.group(1).split()) <= 6:
                                 found_author = m.group(1)
                                 break
-                            if 1 < len(l['text'].split()) <= 6 and re.search(r'[A-ZÁÉÍÓÚÑ]', l['text']):
-                                author_candidates.append(l['text'])
-                        if not found_author and author_candidates:
-                            found_author = author_candidates[0]
-                        if found_title or found_author or found_sub:
-                            break
+                        
+                        if not found_author:
+                            # Tomar el segundo tamaño más grande global
+                            # Solo aceptar si parece un nombre propio (pocas palabras sin artículos)
+                            second_max_size = max([l['size'] for l in all_lines])
+                            author_cands = [l for l in all_lines if l['size'] >= second_max_size * 0.8]
+                            author_cands = sorted(author_cands, key=lambda z: z.get('size', 0), reverse=True)
+                            _stopwords_author = {'el', 'la', 'los', 'las', 'un', 'una', 'como',
+                                                  'para', 'por', 'que', 'del', 'de', 'con', 'en',
+                                                  'the', 'a', 'an', 'and', 'of', 'to', 'in'}
+                            for ac in author_cands:
+                                txt = ac.get('text', '')
+                                words = txt.split()
+                                # Nombre propio: 1-5 palabras, primera palabra en mayuscula,
+                                # ninguna palabra es stopword tipica de subtitulos
+                                if (1 <= len(words) <= 5
+                                        and words[0][:1].isupper()
+                                        and not any(w.lower() in _stopwords_author for w in words)
+                                        and not is_suspect_title(txt)):
+                                    found_author = txt
+                                    break
 
                 if found_title and not title:
                     # ignore obviously bad title candidates

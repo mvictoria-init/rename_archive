@@ -1,5 +1,0 @@
-sentence-transformers
-tqdm
-python-docx
-ebooklib
-numpy
